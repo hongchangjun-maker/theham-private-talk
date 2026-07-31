@@ -2,6 +2,11 @@
 
 초대받고 승인된 구성원만 사용하는 비공개 실시간 채팅·영상회의 SaaS입니다. 생성형 AI는 사용하지 않습니다.
 
+## 공개 배포
+
+- 서비스: <https://theham-private-talk.hhongcjun.workers.dev>
+- GitHub: <https://github.com/hongchangjun-maker/theham-private-talk>
+
 ## 현재 제공 범위
 
 - 반응형 로그인, 초대코드, 가입 승인 요청 UI
