@@ -15,8 +15,8 @@ const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_date: "2026-07-31",
   compatibility_flags: ["nodejs_compat"],
-  assets: {
-    run_worker_first: ["/api/*"],
+  images: {
+    binding: "IMAGES",
   },
   d1_databases: d1
     ? [
@@ -35,6 +35,20 @@ const localBindingConfig = {
         },
       ]
     : [],
+  durable_objects: {
+    bindings: [
+      {
+        name: "CHAT_ROOMS",
+        class_name: "ChatRoom",
+      },
+    ],
+  },
+  migrations: [
+    {
+      tag: "v1",
+      new_sqlite_classes: ["ChatRoom"],
+    },
+  ],
 };
 
 export default defineConfig(async () => {

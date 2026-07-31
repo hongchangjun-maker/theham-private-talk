@@ -8,13 +8,13 @@ import {
   Users, Video, VideoOff, X,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
 
 type View = "dashboard" | "chat" | "meetings" | "contacts" | "notifications" | "files" | "settings" | "admin";
 type LoginMode = "login" | "invite" | "request";
 type Room = { id: string; name: string; preview: string; time: string; unread: number; members: number; type: "direct" | "group" | "notice" };
 type ChatMessage = { id: string; author: string; text: string; time: string; mine?: boolean };
-type IntegrationState = { supabase: boolean; video: boolean; storage: boolean; webPush: boolean };
+type IntegrationState = { cloudflare: boolean; auth: boolean; chat: boolean; video: boolean; storage: boolean; webPush: boolean };
+type CurrentUser = { id: string; email: string; display_name: string; organization: string; role: "member" | "admin" | "super_admin"; status: string };
 
 const navItems: Array<{ id: View; label: string; icon: typeof Home; badge?: number; admin?: boolean }> = [
   { id: "dashboard", label: "홈", icon: Home },
@@ -84,14 +84,15 @@ function Brand({ name }: { name: string }) {
 export function PrivateTalkApp() {
   const [ready, setReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [loginMode, setLoginMode] = useState<LoginMode>("login");
   const [view, setView] = useState<View>("dashboard");
   const [brandName, setBrandName] = useState("THEHAM PRIVATE TALK");
   const [activeRoom, setActiveRoom] = useState("design");
   const [mobileRoomOpen, setMobileRoomOpen] = useState(false);
-  const [rooms, setRooms] = useState(initialRooms);
-  const [messages, setMessages] = useState(seedMessages);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
   const [draft, setDraft] = useState("");
   const [toast, setToast] = useState("");
   const [meetingModal, setMeetingModal] = useState(false);
@@ -99,10 +100,11 @@ export function PrivateTalkApp() {
   const [cameraOn, setCameraOn] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [settingsTab, setSettingsTab] = useState("brand");
-  const [integration, setIntegration] = useState<IntegrationState>({ supabase: isSupabaseConfigured, video: false, storage: false, webPush: false });
+  const [integration, setIntegration] = useState<IntegrationState>({ cloudflare: false, auth: false, chat: false, video: false, storage: false, webPush: false });
+  const [inviteCode, setInviteCode] = useState("");
   const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [scheduled, setScheduled] = useState(meetings);
+  const [scheduled, setScheduled] = useState<ScheduledMeeting[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [createMeeting, setCreateMeeting] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -111,8 +113,17 @@ export function PrivateTalkApp() {
   useEffect(() => {
     const timer = window.setTimeout(() => setReady(true), 420);
     fetch("/api/status", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((data: { integrations?: IntegrationState }) => data.integrations && setIntegration(data.integrations))
+      .then(async (response) => await response.json() as { integrations?: IntegrationState })
+      .then((data) => data.integrations && setIntegration(data.integrations))
+      .catch(() => undefined);
+    fetch("/api/cloudflare/session", { cache: "no-store" })
+      .then(async (response) => await response.json() as { authenticated?: boolean; user?: CurrentUser })
+      .then((data) => {
+        if (data.authenticated && data.user) {
+          setCurrentUser(data.user);
+          setSignedIn(true);
+        }
+      })
       .catch(() => undefined);
     const beforeInstall = (event: Event) => { event.preventDefault(); setInstallPrompt(event); };
     window.addEventListener("beforeinstallprompt", beforeInstall);
@@ -128,6 +139,69 @@ export function PrivateTalkApp() {
 
   useEffect(() => () => stopMedia(), []);
 
+  useEffect(() => {
+    if (!signedIn || demoMode) return;
+    fetch("/api/cloudflare/rooms", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("room load failed");
+        return await response.json() as { rooms: Array<{ id: string; name: string; type: Room["type"]; members: number }> };
+      })
+      .then((data) => {
+        const nextRooms = data.rooms.map((room) => ({ ...room, preview: "대화를 시작해 보세요.", time: "", unread: 0 }));
+        setRooms(nextRooms);
+        if (nextRooms[0]) setActiveRoom(nextRooms[0].id);
+      })
+      .catch(() => showToast("채팅방 목록을 불러오지 못했습니다."));
+  }, [signedIn, demoMode]);
+
+  useEffect(() => {
+    if (!signedIn || demoMode || !activeRoom || !currentUser || !rooms.some((room) => room.id === activeRoom)) return;
+    let socket: WebSocket | null = null;
+    fetch(`/api/cloudflare/rooms/${encodeURIComponent(activeRoom)}/messages`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("message load failed");
+        return await response.json() as { messages: Array<{ id: string; senderId: string; author: string; text: string; createdAt: string }> };
+      })
+      .then((data) => setMessages((prev) => ({
+        ...prev,
+        [activeRoom]: data.messages.map((message) => ({
+          id: message.id,
+          author: message.author,
+          text: message.text,
+          time: new Date(message.createdAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }),
+          mine: message.senderId === currentUser.id,
+        })),
+      })))
+      .catch(() => showToast("메시지 기록을 불러오지 못했습니다."));
+
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    socket = new WebSocket(`${protocol}//${location.host}/api/cloudflare/rooms/${encodeURIComponent(activeRoom)}/socket`);
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(String(event.data)) as { type?: string; message?: { id: string; senderId: string; author: string; text: string; createdAt: string } };
+        if (payload.type !== "message" || !payload.message) return;
+        const message = payload.message;
+        setMessages((prev) => {
+          const existing = prev[activeRoom] ?? [];
+          if (existing.some((item) => item.id === message.id)) return prev;
+          return {
+            ...prev,
+            [activeRoom]: [...existing, {
+              id: message.id,
+              author: message.author,
+              text: message.text,
+              time: new Date(message.createdAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }),
+              mine: message.senderId === currentUser.id,
+            }],
+          };
+        });
+      } catch {
+        // Ignore non-JSON heartbeat frames.
+      }
+    };
+    return () => socket?.close(1000, "room changed");
+  }, [signedIn, demoMode, activeRoom, currentUser, rooms]);
+
   const currentRoom = rooms.find((room) => room.id === activeRoom) ?? rooms[0];
   const currentMessages = messages[activeRoom] ?? [];
   const viewLabel = navItems.find((item) => item.id === view)?.label ?? "홈";
@@ -139,25 +213,37 @@ export function PrivateTalkApp() {
     const form = new FormData(event.currentTarget);
     const email = String(form.get("email") ?? "");
     const password = String(form.get("password") ?? "");
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-      showToast("Supabase 연결이 필요합니다. 아래의 제품 둘러보기를 이용해 주세요.");
+    const response = await fetch("/api/cloudflare/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await response.json() as { user?: CurrentUser; error?: string };
+    if (!response.ok || !data.user) {
+      showToast(data.error ?? "로그인에 실패했습니다.");
       return;
     }
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) { showToast("로그인에 실패했습니다. 계정 상태와 입력값을 확인해 주세요."); return; }
+    setCurrentUser(data.user);
+    setDemoMode(false);
+    setRooms([]);
+    setMessages({});
+    setScheduled([]);
     setSignedIn(true);
   }
 
   function enterDemo() {
     setDemoMode(true);
+    setRooms(initialRooms);
+    setMessages(seedMessages);
+    setScheduled(meetings);
     setSignedIn(true);
     showToast("읽기·체험용 데모 모드로 입장했습니다.");
   }
 
   function logout() {
-    getSupabaseClient()?.auth.signOut().catch(() => undefined);
+    if (!demoMode) fetch("/api/cloudflare/logout", { method: "POST" }).catch(() => undefined);
     stopMedia();
+    setCurrentUser(null);
     setSignedIn(false);
     setDemoMode(false);
     setView("dashboard");
@@ -168,11 +254,25 @@ export function PrivateTalkApp() {
     setMobileRoomOpen(false);
   }
 
-  function submitMessage() {
+  async function submitMessage() {
     const text = draft.trim();
     if (!text) return;
-    if (!demoMode && !integration.supabase) {
-      showToast("실시간 채팅 서버가 연결되지 않아 전송하지 않았습니다.");
+    if (!demoMode && !integration.chat) {
+      showToast("Cloudflare 실시간 채팅 서버가 연결되지 않았습니다.");
+      return;
+    }
+    if (!demoMode) {
+      const response = await fetch(`/api/cloudflare/rooms/${encodeURIComponent(activeRoom)}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await response.json() as { message?: ChatMessage; error?: string };
+      if (!response.ok || !data.message) {
+        showToast(data.error ?? "메시지를 전송하지 못했습니다.");
+        return;
+      }
+      setDraft("");
       return;
     }
     const next: ChatMessage = { id: crypto.randomUUID(), author: "나", text, time: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }), mine: true };
@@ -183,7 +283,7 @@ export function PrivateTalkApp() {
   }
 
   function onDraftKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitMessage(); }
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitMessage(); }
   }
 
   async function startCamera() {
@@ -255,28 +355,28 @@ export function PrivateTalkApp() {
   }
 
   if (!ready) return <div className="loading-screen"><div className="loading-mark"><div className="loading-dot" />PRIVATE TALK</div></div>;
-  if (!signedIn) return <LoginScreen mode={loginMode} setMode={setLoginMode} onLogin={handleLogin} onDemo={enterDemo} configured={integration.supabase} brand={brandName} showToast={showToast} toast={toast} />;
+  if (!signedIn) return <LoginScreen mode={loginMode} setMode={setLoginMode} onLogin={handleLogin} onDemo={enterDemo} configured={integration.auth} brand={brandName} showToast={showToast} toast={toast} inviteCode={inviteCode} setInviteCode={setInviteCode} />;
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <Brand name={brandName} />
         <nav className="nav-list" aria-label="주요 메뉴">
-          {navItems.map((item) => {
+          {navItems.filter((item) => !item.admin || demoMode || currentUser?.role === "admin" || currentUser?.role === "super_admin").map((item) => {
             const Icon = item.icon;
             return (
               <button key={item.id} className={`nav-button ${view === item.id ? "active" : ""}`} onClick={() => changeView(item.id)}>
-                <Icon size={19} />{item.label}{item.badge ? <span className="nav-badge">{item.badge}</span> : null}
+                <Icon size={19} />{item.label}{demoMode && item.badge ? <span className="nav-badge">{item.badge}</span> : null}
               </button>
             );
           })}
         </nav>
         <div className="sidebar-bottom">
           <div className="connection-box" aria-label="서비스 연결 상태">
-            <div className="connection-line"><span className={`status-dot ${integration.supabase ? "" : "off"}`} />채팅 서버 {integration.supabase ? "연결됨" : "설정 필요"}</div>
+            <div className="connection-line"><span className={`status-dot ${integration.chat ? "" : "off"}`} />Cloudflare 채팅 {integration.chat ? "연결됨" : "점검 필요"}</div>
             <div className="connection-line"><span className={`status-dot ${integration.video ? "" : "off"}`} />영상 서버 {integration.video ? "연결됨" : "설정 필요"}</div>
           </div>
-          <div className="profile-chip"><Avatar name="관리자" /><div><strong>관리자</strong><small>{demoMode ? "데모 모드" : "최고관리자"}</small></div></div>
+          <div className="profile-chip"><Avatar name={currentUser?.display_name ?? "관리자"} /><div><strong>{currentUser?.display_name ?? "관리자"}</strong><small>{demoMode ? "데모 모드" : currentUser?.role === "super_admin" ? "최고관리자" : currentUser?.role === "admin" ? "관리자" : "승인 회원"}</small></div></div>
         </div>
       </aside>
 
@@ -285,24 +385,24 @@ export function PrivateTalkApp() {
           <div className="page-title"><h1>{viewLabel}</h1><span>초대받은 구성원을 위한 안전한 소통 공간</span></div>
           <div className="top-actions">
             <div className="top-status">
-              <span className="status-pill"><span className={`status-dot ${integration.supabase ? "" : "off"}`} />실시간 {integration.supabase ? "연결" : "대기"}</span>
+              <span className="status-pill"><span className={`status-dot ${integration.chat ? "" : "off"}`} />실시간 {integration.chat ? "연결" : "대기"}</span>
               <span className="status-pill"><LockKeyhole size={12} />비공개 공간</span>
             </div>
-            <button className="icon-btn" aria-label="알림 보기" onClick={() => changeView("notifications")}><Bell size={18} /><span className="notification-dot" /></button>
+            <button className="icon-btn" aria-label="알림 보기" onClick={() => changeView("notifications")}><Bell size={18} />{demoMode && <span className="notification-dot" />}</button>
             <button className="icon-btn" aria-label="로그아웃" onClick={logout}><LogOut size={18} /></button>
           </div>
         </header>
 
         <div className="content">
           {demoMode && <div className="demo-banner"><Info size={16} />데모 데이터로 제품을 둘러보는 중입니다. 입력 내용은 서버에 저장되지 않으며 외부 사용자에게 전송되지 않습니다.</div>}
-          {view === "dashboard" && <Dashboard setView={changeView} onMeeting={() => setMeetingModal(true)} />}
-          {view === "chat" && <ChatView rooms={rooms} activeRoom={activeRoom} setRoom={(id) => { setActiveRoom(id); setMobileRoomOpen(true); setRooms((prev) => prev.map((r) => r.id === id ? { ...r, unread: 0 } : r)); }} mobileOpen={mobileRoomOpen} closeMobile={() => setMobileRoomOpen(false)} room={currentRoom} messages={currentMessages} draft={draft} setDraft={setDraft} submit={submitMessage} onKey={onDraftKey} onMeeting={() => setMeetingModal(true)} showToast={showToast} />}
+          {view === "dashboard" && <Dashboard setView={changeView} onMeeting={() => setMeetingModal(true)} rooms={rooms} meetingCount={scheduled.length} demo={demoMode} />}
+          {view === "chat" && <ChatView rooms={rooms} activeRoom={activeRoom} setRoom={(id) => { setActiveRoom(id); setMobileRoomOpen(true); setRooms((prev) => prev.map((r) => r.id === id ? { ...r, unread: 0 } : r)); }} mobileOpen={mobileRoomOpen} closeMobile={() => setMobileRoomOpen(false)} room={currentRoom} messages={currentMessages} draft={draft} setDraft={setDraft} submit={submitMessage} onKey={onDraftKey} onMeeting={() => setMeetingModal(true)} showToast={showToast} demo={demoMode} />}
           {view === "meetings" && <MeetingsView meetings={scheduled} openMeeting={() => setMeetingModal(true)} openCreate={() => setCreateMeeting(true)} integration={integration.video} />}
-          {view === "contacts" && <ContactsView openChat={(name) => { showToast(`${name}님과의 대화를 열었습니다.`); changeView("chat"); setActiveRoom("minseo"); setMobileRoomOpen(true); }} openMeeting={() => setMeetingModal(true)} />}
-          {view === "notifications" && <NotificationsView showToast={showToast} />}
-          {view === "files" && <FilesView storage={integration.storage} showToast={showToast} />}
+          {view === "contacts" && <ContactsView demo={demoMode} openChat={(name) => { showToast(`${name}님과의 대화를 열었습니다.`); changeView("chat"); setActiveRoom("minseo"); setMobileRoomOpen(true); }} openMeeting={() => setMeetingModal(true)} />}
+          {view === "notifications" && <NotificationsView demo={demoMode} showToast={showToast} />}
+          {view === "files" && <FilesView storage={integration.storage} roomId={activeRoom} demo={demoMode} showToast={showToast} />}
           {view === "settings" && <SettingsView install={installApp} notificationsEnabled={notificationsEnabled} enableNotifications={enableNotifications} showToast={showToast} />}
-          {view === "admin" && <AdminView tab={settingsTab} setTab={setSettingsTab} brand={brandName} saveBrand={(name) => { setBrandName(name || "THEHAM PRIVATE TALK"); showToast("브랜드 설정을 현재 세션에 적용했습니다."); }} integration={integration} demo={demoMode} showToast={showToast} />}
+          {view === "admin" && <AdminView tab={settingsTab} setTab={setSettingsTab} brand={brandName} saveBrand={(name) => { setBrandName(name || "THEHAM PRIVATE TALK"); showToast("브랜드 설정을 현재 세션에 적용했습니다."); }} integration={integration} demo={demoMode} rooms={rooms} showToast={showToast} />}
         </div>
       </main>
 
@@ -321,9 +421,49 @@ export function PrivateTalkApp() {
   );
 }
 
-function LoginScreen({ mode, setMode, onLogin, onDemo, configured, brand, showToast, toast }: {
-  mode: LoginMode; setMode: (mode: LoginMode) => void; onLogin: (event: FormEvent<HTMLFormElement>) => void; onDemo: () => void; configured: boolean; brand: string; showToast: (text: string) => void; toast: string;
+function LoginScreen({ mode, setMode, onLogin, onDemo, configured, brand, showToast, toast, inviteCode, setInviteCode }: {
+  mode: LoginMode; setMode: (mode: LoginMode) => void; onLogin: (event: FormEvent<HTMLFormElement>) => void; onDemo: () => void; configured: boolean; brand: string; showToast: (text: string) => void; toast: string; inviteCode: string; setInviteCode: (value: string) => void;
 }) {
+  async function verifyInvitation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const code = String(new FormData(event.currentTarget).get("invite") ?? "");
+    const response = await fetch("/api/cloudflare/invitations/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) {
+      showToast(data.error ?? "초대코드를 확인하지 못했습니다.");
+      return;
+    }
+    setInviteCode(code);
+    setMode("request");
+  }
+
+  async function requestRegistration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const response = await fetch("/api/cloudflare/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: inviteCode,
+        displayName: form.get("displayName"),
+        organization: form.get("organization"),
+        email: form.get("email"),
+        password: form.get("password"),
+      }),
+    });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) {
+      showToast(data.error ?? "가입 요청을 처리하지 못했습니다.");
+      return;
+    }
+    showToast("가입 요청이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.");
+    setMode("login");
+  }
+
   return (
     <div className="login-shell">
       <section className="login-visual">
@@ -346,7 +486,9 @@ function LoginScreen({ mode, setMode, onLogin, onDemo, configured, brand, showTo
                 <button className="primary-btn full" type="submit">로그인</button>
               </form>
               <div className="login-links"><button className="text-btn" onClick={() => showToast("관리자에게 비밀번호 초기화를 요청해 주세요.")}>비밀번호 찾기</button><button className="text-btn" onClick={() => setMode("invite")}>초대코드로 가입</button></div>
-              {!configured && <div className="setup-note"><strong>운영 연결 전 상태</strong><br />Supabase 주소와 공개 키를 설정하면 실제 로그인과 가입 승인이 활성화됩니다. 현재는 가짜 로그인을 허용하지 않습니다.</div>}
+              {configured
+                ? <div className="setup-note"><strong>Cloudflare 운영 연결 완료</strong><br />실제 계정, 가입 승인, 세션과 채팅이 Cloudflare에서 동작합니다.</div>
+                : <div className="setup-note"><strong>서버 점검 중</strong><br />Cloudflare 인증 서버 연결을 확인하고 있습니다. 잠시 후 다시 시도해 주세요.</div>}
               <button className="secondary-btn full demo-entry" onClick={onDemo}>제품 둘러보기 · 데모 모드</button>
             </>
           )}
@@ -354,7 +496,7 @@ function LoginScreen({ mode, setMode, onLogin, onDemo, configured, brand, showTo
             <>
               <button className="text-btn" onClick={() => setMode("login")}><ChevronLeft size={16} />로그인으로</button>
               <p className="eyebrow" style={{ marginTop: 20 }}>Invitation only</p><h2>초대코드 확인</h2><p>관리자에게 받은 유효한 초대코드를 입력해 주세요.</p>
-              <form onSubmit={(e) => { e.preventDefault(); if (configured) setMode("request"); else showToast("가입 서버 연결 후 초대코드를 검증할 수 있습니다."); }}>
+              <form onSubmit={verifyInvitation}>
                 <div className="field"><label htmlFor="invite">초대코드</label><input id="invite" name="invite" placeholder="XXXX-XXXX-XXXX" required /></div>
                 <button className="primary-btn full" type="submit">초대코드 확인</button>
               </form>
@@ -364,9 +506,11 @@ function LoginScreen({ mode, setMode, onLogin, onDemo, configured, brand, showTo
             <>
               <button className="text-btn" onClick={() => setMode("invite")}><ChevronLeft size={16} />이전</button>
               <p className="eyebrow" style={{ marginTop: 20 }}>Join request</p><h2>가입 승인 요청</h2><p>관리자가 확인할 기본 정보를 입력해 주세요.</p>
-              <form onSubmit={(e) => { e.preventDefault(); showToast("가입 요청을 관리자에게 전달했습니다."); setMode("login"); }}>
-                <div className="field"><label>이름</label><input required /></div>
-                <div className="field"><label>소속</label><input required /></div>
+              <form onSubmit={requestRegistration}>
+                <div className="field"><label htmlFor="register-name">이름</label><input id="register-name" name="displayName" required minLength={2} maxLength={60} /></div>
+                <div className="field"><label htmlFor="register-org">소속</label><input id="register-org" name="organization" required maxLength={100} /></div>
+                <div className="field"><label htmlFor="register-email">이메일</label><input id="register-email" name="email" type="email" autoComplete="username" required /></div>
+                <div className="field"><label htmlFor="register-password">비밀번호</label><input id="register-password" name="password" type="password" autoComplete="new-password" required minLength={10} maxLength={128} placeholder="영문·숫자를 포함해 10자 이상" /></div>
                 <button className="primary-btn full" type="submit">승인 요청</button>
               </form>
             </>
@@ -378,36 +522,36 @@ function LoginScreen({ mode, setMode, onLogin, onDemo, configured, brand, showTo
   );
 }
 
-function Dashboard({ setView, onMeeting }: { setView: (view: View) => void; onMeeting: () => void }) {
+function Dashboard({ setView, onMeeting, rooms, meetingCount, demo }: { setView: (view: View) => void; onMeeting: () => void; rooms: Room[]; meetingCount: number; demo: boolean }) {
   return (
     <>
       <section className="hero">
         <div className="hero-copy"><p className="eyebrow">Private communication suite</p><h2>대화와 회의를<br />하나의 안전한 공간에서.</h2><p>팀과 파트너가 신뢰할 수 있는 비공개 채팅, 일정 기반 영상회의, 안전한 파일 공유를 경험하세요.</p><div className="hero-actions"><button className="primary-btn" onClick={() => setView("chat")}><MessageCircle size={17} />채팅 시작</button><button className="secondary-btn" onClick={onMeeting}><Video size={17} />영상회의</button><button className="secondary-btn" onClick={() => setView("admin")}><Link2 size={17} />초대 관리</button></div></div>
-        <div className="hero-art" aria-hidden="true"><div className="hero-orb" /><div className="mock-window"><div className="mock-head"><i /><i /><i /></div><div className="mock-grid"><div className="mock-person">김민서</div><div className="mock-person">박준호</div><div className="mock-person">이서연</div><div className="mock-person">관리자</div></div></div></div>
+        <div className="hero-art" aria-hidden="true"><div className="hero-orb" /><div className="mock-window"><div className="mock-head"><i /><i /><i /></div><div className="mock-grid"><div className="mock-person">팀 채팅</div><div className="mock-person">보안 회의</div><div className="mock-person">파일 공유</div><div className="mock-person">승인 회원</div></div></div></div>
       </section>
       <section className="stats-grid">
-        {[["읽지 않은 메시지", "4", MessageCircle], ["오늘 회의", "2", Video], ["온라인 구성원", "7", Users], ["공유 파일", "18", FolderOpen]].map(([label, value, Icon]) => <div className="stat-card" key={String(label)}><div><p>{label as string}</p><strong>{value as string}</strong></div><span className="stat-icon"><Icon size={20} /></span></div>)}
+        {[["읽지 않은 메시지", String(rooms.reduce((sum, room) => sum + room.unread, 0)), MessageCircle], ["예정 회의", String(meetingCount), Video], ["참여 채팅방", String(rooms.length), Users], ["파일 저장소", demo ? "데모" : "R2", FolderOpen]].map(([label, value, Icon]) => <div className="stat-card" key={String(label)}><div><p>{label as string}</p><strong>{value as string}</strong></div><span className="stat-icon"><Icon size={20} /></span></div>)}
       </section>
       <section className="dashboard-grid">
-        <div className="panel"><div className="panel-header"><div><h2>최근 대화</h2><p>참여 중인 비공개 채팅방</p></div><button className="text-btn" onClick={() => setView("chat")}>전체 보기</button></div><div className="list">{initialRooms.slice(0, 4).map((room) => <button className="list-item" key={room.id} onClick={() => setView("chat")}><Avatar name={room.name} /><div className="list-item-body"><strong>{room.name}</strong><span>{room.preview}</span></div><div className="list-meta">{room.time}{room.unread ? <span className="unread">{room.unread}</span> : null}</div></button>)}</div></div>
-        <div className="panel"><div className="panel-header"><div><h2>다가오는 회의</h2><p>오늘 예정된 일정</p></div><CalendarDays size={19} color="#D71962" /></div><div className="meeting-mini"><strong>브랜드 프로젝트 주간회의</strong><span>오늘 오후 2:00 · 8명</span><button className="soft-btn" onClick={onMeeting}>장치 점검</button></div><div className="meeting-mini"><strong>신규 파트너 온보딩</strong><span>오늘 오후 4:30 · 5명</span><div className="participant-stack"><Avatar name="김민서" size="sm" /><Avatar name="박준호" size="sm" /><Avatar name="이서연" size="sm" /></div></div></div>
+        <div className="panel"><div className="panel-header"><div><h2>최근 대화</h2><p>참여 중인 비공개 채팅방</p></div><button className="text-btn" onClick={() => setView("chat")}>전체 보기</button></div>{rooms.length ? <div className="list">{rooms.slice(0, 4).map((room) => <button className="list-item" key={room.id} onClick={() => setView("chat")}><Avatar name={room.name} /><div className="list-item-body"><strong>{room.name}</strong><span>{room.preview}</span></div><div className="list-meta">{room.time}{room.unread ? <span className="unread">{room.unread}</span> : null}</div></button>)}</div> : <div className="empty-state"><MessageCircle size={30} /><h3>참여 중인 채팅방이 없습니다</h3><p>관리자가 방에 초대하면 여기에 표시됩니다.</p></div>}</div>
+        <div className="panel"><div className="panel-header"><div><h2>다가오는 회의</h2><p>예약된 일정</p></div><CalendarDays size={19} color="#D71962" /></div>{demo ? <><div className="meeting-mini"><strong>브랜드 프로젝트 주간회의</strong><span>오늘 오후 2:00 · 8명</span><button className="soft-btn" onClick={onMeeting}>장치 점검</button></div><div className="meeting-mini"><strong>신규 파트너 온보딩</strong><span>오늘 오후 4:30 · 5명</span></div></> : <div className="empty-state"><CalendarDays size={30} /><h3>예약된 회의가 없습니다</h3><p>RealtimeKit 연결 후 실제 회의 일정이 표시됩니다.</p></div>}</div>
       </section>
     </>
   );
 }
 
-function ChatView({ rooms, activeRoom, setRoom, mobileOpen, closeMobile, room, messages, draft, setDraft, submit, onKey, onMeeting, showToast }: {
-  rooms: Room[]; activeRoom: string; setRoom: (id: string) => void; mobileOpen: boolean; closeMobile: () => void; room: Room; messages: ChatMessage[]; draft: string; setDraft: (text: string) => void; submit: () => void; onKey: (event: KeyboardEvent<HTMLTextAreaElement>) => void; onMeeting: () => void; showToast: (text: string) => void;
+function ChatView({ rooms, activeRoom, setRoom, mobileOpen, closeMobile, room, messages, draft, setDraft, submit, onKey, onMeeting, showToast, demo }: {
+  rooms: Room[]; activeRoom: string; setRoom: (id: string) => void; mobileOpen: boolean; closeMobile: () => void; room: Room; messages: ChatMessage[]; draft: string; setDraft: (text: string) => void; submit: () => void; onKey: (event: KeyboardEvent<HTMLTextAreaElement>) => void; onMeeting: () => void; showToast: (text: string) => void; demo: boolean;
 }) {
   return (
     <div className={`chat-layout ${mobileOpen ? "show-room" : ""}`}>
       <aside className="chat-rooms"><div className="search-box"><Search size={16} /><input aria-label="채팅방 검색" placeholder="채팅방 검색" /></div>{rooms.map((item) => <button key={item.id} className={`list-item room-button ${item.id === activeRoom ? "active" : ""}`} onClick={() => setRoom(item.id)}><Avatar name={item.name} /><div className="list-item-body"><strong>{item.name}</strong><span>{item.preview}</span></div><div className="list-meta">{item.time}{item.unread ? <span className="unread">{item.unread}</span> : null}</div></button>)}</aside>
       <section className="chat-main">
-        <header className="chat-head"><div className="chat-head-title"><button className="icon-btn mobile-only" aria-label="채팅방 목록" onClick={closeMobile}><ChevronLeft size={19} /></button><Avatar name={room.name} /><div><strong>{room.name}</strong><span>● {room.members}명 · 3명 온라인</span></div></div><div className="chat-head-actions"><button className="icon-btn" aria-label="채팅 검색" onClick={() => showToast("이 대화의 메시지 검색을 준비했습니다.")}><Search size={17} /></button><button className="icon-btn" aria-label="영상회의 시작" onClick={onMeeting}><Video size={17} /></button><button className="secondary-btn" onClick={() => showToast("참여자 패널은 큰 화면에서 오른쪽에 표시됩니다.")}><Users size={16} />참여자</button></div></header>
+        <header className="chat-head"><div className="chat-head-title"><button className="icon-btn mobile-only" aria-label="채팅방 목록" onClick={closeMobile}><ChevronLeft size={19} /></button><Avatar name={room.name} /><div><strong>{room.name}</strong><span>● {room.members}명{demo ? " · 3명 온라인" : ""}</span></div></div><div className="chat-head-actions"><button className="icon-btn" aria-label="채팅 검색" onClick={() => showToast("이 대화의 메시지 검색을 준비했습니다.")}><Search size={17} /></button><button className="icon-btn" aria-label="영상회의 시작" onClick={onMeeting}><Video size={17} /></button><button className="secondary-btn" onClick={() => showToast("참여자 패널은 큰 화면에서 오른쪽에 표시됩니다.")}><Users size={16} />참여자</button></div></header>
         <div className="messages" aria-live="polite"><div className="date-divider">오늘</div>{messages.map((message) => <div className={`message-row ${message.mine ? "mine" : ""}`} key={message.id}>{!message.mine && <Avatar name={message.author} size="sm" />}<div className="message-wrap">{!message.mine && <p className="message-author">{message.author}</p>}<div className="bubble">{message.text}</div><div className="message-time">{message.time}</div></div></div>)}</div>
         <footer className="chat-compose"><button className="icon-btn" aria-label="파일 첨부" onClick={() => showToast("스토리지 연결 후 파일 선택기가 활성화됩니다.")}><Paperclip size={18} /></button><button className="icon-btn" aria-label="이모지" onClick={() => setDraft(`${draft} 🙂`)}><Smile size={18} /></button><textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKey} aria-label="메시지 입력" placeholder="메시지를 입력하세요" /><button className="primary-btn" aria-label="메시지 전송" onClick={submit}><Send size={17} /></button></footer>
       </section>
-      <aside className="chat-info"><div className="room-profile"><Avatar name={room.name} size="lg" /><h3>{room.name}</h3><p>프로젝트 진행을 위한 비공개 대화방</p></div><button className="soft-btn full" onClick={onMeeting}><Video size={16} />영상회의 시작</button><div className="panel-header" style={{ marginTop: 24 }}><h2>참여자 {room.members}</h2></div>{people.slice(0, 5).map((person) => <div className="member-line" key={person.name}><Avatar name={person.name} size="sm" /><div><strong>{person.name}</strong><span>{person.status === "online" ? "온라인" : "자리 비움"}</span></div></div>)}</aside>
+      <aside className="chat-info"><div className="room-profile"><Avatar name={room.name} size="lg" /><h3>{room.name}</h3><p>프로젝트 진행을 위한 비공개 대화방</p></div><button className="soft-btn full" onClick={onMeeting}><Video size={16} />영상회의 시작</button><div className="panel-header" style={{ marginTop: 24 }}><h2>참여자 {room.members}</h2></div>{demo ? people.slice(0, 5).map((person) => <div className="member-line" key={person.name}><Avatar name={person.name} size="sm" /><div><strong>{person.name}</strong><span>{person.status === "online" ? "온라인" : "자리 비움"}</span></div></div>) : <div className="setup-note">D1에서 확인된 참여자 수만 표시합니다. 회원 상세 명단은 관리자 회원 관리에서 확인하세요.</div>}</aside>
     </div>
   );
 }
@@ -424,14 +568,14 @@ function MeetingsView({ meetings, openMeeting, openCreate, integration }: { meet
         <div className="feature-card"><span className="stat-icon"><CalendarDays size={21} /></span><h3>예약 회의</h3><p>시간, 참여자, 대기실을 미리 설정합니다.</p><button className="soft-btn" onClick={openCreate}>새 일정 만들기</button></div>
         <div className="feature-card"><span className="stat-icon"><Link2 size={21} /></span><h3>초대 회의</h3><p>만료시간이 있는 안전한 초대링크를 발급합니다.</p><button className="soft-btn" onClick={() => navigator.clipboard?.writeText("Provider setup required")}>연결 후 사용</button></div>
       </div>
-      <div className="panel"><div className="panel-header"><div><h2>예정된 회의</h2><p>참여 예정인 회의 {meetings.length}개</p></div></div><div className="meeting-list">{meetings.map((meeting) => <div className="meeting-card" key={meeting.id}><div className="meeting-time"><strong>{meeting.time}</strong><span>{meeting.date}</span></div><div><span className={`badge ${meeting.secure ? "" : "warn"}`}>{meeting.secure ? "대기실 사용" : "대기실 미사용"}</span><h3>{meeting.title}</h3><p>{meeting.desc}</p></div><button className="primary-btn" onClick={openMeeting}>입장 준비</button></div>)}</div></div>
+      <div className="panel"><div className="panel-header"><div><h2>예정된 회의</h2><p>참여 예정인 회의 {meetings.length}개</p></div></div>{meetings.length ? <div className="meeting-list">{meetings.map((meeting) => <div className="meeting-card" key={meeting.id}><div className="meeting-time"><strong>{meeting.time}</strong><span>{meeting.date}</span></div><div><span className={`badge ${meeting.secure ? "" : "warn"}`}>{meeting.secure ? "대기실 사용" : "대기실 미사용"}</span><h3>{meeting.title}</h3><p>{meeting.desc}</p></div><button className="primary-btn" onClick={openMeeting}>입장 준비</button></div>)}</div> : <div className="empty-state"><Video size={32} /><h3>예약된 실제 회의가 없습니다</h3><p>RealtimeKit 자격 증명 연결 후 회의를 예약할 수 있습니다.</p></div>}</div>
     </>
   );
 }
 
-function ContactsView({ openChat, openMeeting }: { openChat: (name: string) => void; openMeeting: () => void }) {
+function ContactsView({ openChat, openMeeting, demo }: { openChat: (name: string) => void; openMeeting: () => void; demo: boolean }) {
   const [query, setQuery] = useState("");
-  const filtered = useMemo(() => people.filter((person) => `${person.name} ${person.role}`.toLowerCase().includes(query.toLowerCase())), [query]);
+  const filtered = useMemo(() => (demo ? people : []).filter((person) => `${person.name} ${person.role}`.toLowerCase().includes(query.toLowerCase())), [query, demo]);
   return (
     <>
       <div className="section-heading"><div><p className="eyebrow">Trusted contacts</p><h2>연락처</h2><p>승인된 구성원과 친구를 찾고 대화를 시작하세요.</p></div><button className="primary-btn"><Plus size={17} />친구 추가</button></div>
@@ -441,32 +585,69 @@ function ContactsView({ openChat, openMeeting }: { openChat: (name: string) => v
   );
 }
 
-function NotificationsView({ showToast }: { showToast: (text: string) => void }) {
-  const [items, setItems] = useState([
+function NotificationsView({ showToast, demo }: { showToast: (text: string) => void; demo: boolean }) {
+  const [items, setItems] = useState(demo ? [
     { id: 1, title: "김민서님이 회원님을 언급했습니다", body: "브랜드 프로젝트 TF · 8분 전", unread: true, icon: MessageCircle },
     { id: 2, title: "회의 시작 10분 전입니다", body: "브랜드 프로젝트 주간회의 · 오후 2:00", unread: true, icon: Video },
     { id: 3, title: "새 파일이 업로드되었습니다", body: "파트너 협의회 · 어제", unread: false, icon: FileText },
     { id: 4, title: "새 기기 로그인이 확인되었습니다", body: "Chrome · Windows · 2일 전", unread: false, icon: ShieldCheck },
-  ]);
+  ] : []);
   return (
     <>
       <div className="section-heading"><div><p className="eyebrow">Notifications</p><h2>알림</h2><p>메시지, 회의, 파일과 보안 활동을 확인하세요.</p></div><button className="secondary-btn" onClick={() => { setItems(items.map((item) => ({ ...item, unread: false }))); showToast("모든 알림을 읽음으로 표시했습니다."); }}><Check size={16} />모두 읽음</button></div>
-      <div className="panel"><div className="list">{items.map((item) => { const Icon = item.icon; return <button className="list-item" key={item.id} onClick={() => setItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry))}><span className="stat-icon"><Icon size={19} /></span><div className="list-item-body"><strong>{item.title}</strong><span>{item.body}</span></div>{item.unread && <span className="status-dot" />}</button>; })}</div></div>
+      <div className="panel">{items.length ? <div className="list">{items.map((item) => { const Icon = item.icon; return <button className="list-item" key={item.id} onClick={() => setItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry))}><span className="stat-icon"><Icon size={19} /></span><div className="list-item-body"><strong>{item.title}</strong><span>{item.body}</span></div>{item.unread && <span className="status-dot" />}</button>; })}</div> : <div className="empty-state"><Bell size={30} /><h3>새 알림이 없습니다</h3><p>실제 메시지와 보안 활동이 생기면 여기에 표시됩니다.</p></div>}</div>
     </>
   );
 }
 
-function FilesView({ storage, showToast }: { storage: boolean; showToast: (text: string) => void }) {
-  const files = [
+function FilesView({ storage, roomId, demo, showToast }: { storage: boolean; roomId: string; demo: boolean; showToast: (text: string) => void }) {
+  const demoFiles = [
     { name: "브랜드_가이드_초안.pdf", type: "PDF", size: "4.8 MB", room: "브랜드 프로젝트 TF" },
     { name: "모바일_화면_검토.png", type: "PNG", size: "2.1 MB", room: "브랜드 프로젝트 TF" },
     { name: "파트너_일정표.xlsx", type: "XLSX", size: "184 KB", room: "파트너 협의회" },
   ];
+  const [files, setFiles] = useState<Array<{ id: string; fileName: string; contentType: string; byteSize: number; uploader: string }>>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  async function loadFiles() {
+    if (demo || !roomId) return;
+    const response = await fetch(`/api/cloudflare/files?roomId=${encodeURIComponent(roomId)}`, { cache: "no-store" });
+    const data = await response.json() as { files?: typeof files; error?: string };
+    if (!response.ok) {
+      showToast(data.error ?? "파일 목록을 불러오지 못했습니다.");
+      return;
+    }
+    setFiles(data.files ?? []);
+  }
+
+  async function uploadFile(file: File) {
+    if (file.size > 25 * 1024 * 1024) {
+      showToast("파일은 25MB 이하만 업로드할 수 있습니다.");
+      return;
+    }
+    const response = await fetch(`/api/cloudflare/files?roomId=${encodeURIComponent(roomId)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        "X-File-Name": encodeURIComponent(file.name),
+      },
+      body: file,
+    });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) {
+      showToast(data.error ?? "파일을 업로드하지 못했습니다.");
+      return;
+    }
+    showToast("Cloudflare R2에 파일을 업로드했습니다.");
+    await loadFiles();
+  }
+
   return (
     <>
-      <div className="section-heading"><div><p className="eyebrow">Shared files</p><h2>파일함</h2><p>채팅방에서 공유된 파일을 안전하게 찾아보세요.</p></div><button className="primary-btn" onClick={() => showToast(storage ? "파일 선택기를 열 준비가 되었습니다." : "파일 저장소를 먼저 연결해 주세요.")}><Paperclip size={17} />파일 업로드</button></div>
-      {!storage && <div className="demo-banner"><AlertTriangle size={16} />파일 저장소가 연결되지 않아 아래 목록은 데모 전용입니다. 업로드와 다운로드는 실행되지 않습니다.</div>}
-      <div className="panel"><div className="list">{files.map((file) => <div className="list-item" key={file.name}><span className="stat-icon">{file.type === "PNG" ? <ImageIcon size={20} /> : <FileText size={20} />}</span><div className="list-item-body"><strong>{file.name}</strong><span>{file.room} · {file.type} · {file.size}</span></div><button className="icon-btn" aria-label={`${file.name} 다운로드`} onClick={() => showToast(storage ? "서명된 다운로드 URL을 요청했습니다." : "저장소 연결 전에는 다운로드할 수 없습니다.")}><Download size={17} /></button></div>)}</div></div>
+      <div className="section-heading"><div><p className="eyebrow">Shared files</p><h2>파일함</h2><p>현재 채팅방에서 공유된 파일을 안전하게 찾아보세요.</p></div><button className="primary-btn" onClick={() => demo ? showToast("데모 모드에서는 파일을 업로드하지 않습니다.") : storage ? fileInput.current?.click() : showToast("파일 저장소 연결을 확인해 주세요.")}><Paperclip size={17} />파일 업로드</button><input ref={fileInput} hidden type="file" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFile(file); event.currentTarget.value = ""; }} /></div>
+      {demo && <div className="demo-banner"><Info size={16} />데모 파일 목록입니다. 실제 업로드와 다운로드는 하지 않습니다.</div>}
+      {!demo && <button className="secondary-btn" style={{ marginBottom: 14 }} onClick={() => void loadFiles()}>파일 목록 새로고침</button>}
+      <div className="panel"><div className="list">{(demo ? demoFiles.map((file, index) => ({ id: String(index), fileName: file.name, contentType: file.type, byteSize: 0, uploader: file.room })) : files).map((file) => <div className="list-item" key={file.id}><span className="stat-icon">{file.contentType.startsWith("image/") || file.contentType === "PNG" ? <ImageIcon size={20} /> : <FileText size={20} />}</span><div className="list-item-body"><strong>{file.fileName}</strong><span>{file.uploader} · {file.contentType} · {file.byteSize ? `${(file.byteSize / 1024).toFixed(1)} KB` : "데모"}</span></div><button className="icon-btn" aria-label={`${file.fileName} 다운로드`} onClick={() => demo ? showToast("데모 파일은 다운로드하지 않습니다.") : window.open(`/api/cloudflare/files/${encodeURIComponent(file.id)}`, "_blank", "noopener,noreferrer")}><Download size={17} /></button></div>)}</div></div>
     </>
   );
 }
@@ -476,25 +657,74 @@ function SettingsView({ install, notificationsEnabled, enableNotifications, show
   return (
     <>
       <div className="section-heading"><div><p className="eyebrow">Preferences</p><h2>설정</h2><p>내 프로필, 알림과 기기 환경을 관리하세요.</p></div></div>
-      <div className="settings-layout"><div className="panel settings-nav">{["내 프로필", "알림", "채팅", "보안", "연결된 기기"].map((item, index) => <button className={index === 0 ? "active" : ""} key={item}>{item}</button>)}</div><div className="panel settings-form"><div className="setting-section"><h3>내 프로필</h3><p>다른 구성원에게 표시되는 기본 정보입니다.</p><div className="form-row"><div className="field"><label>표시 이름</label><input defaultValue="관리자" /></div><div className="field"><label>소속</label><input defaultValue="더함스튜디오" /></div></div><div className="field"><label>상태 메시지</label><input defaultValue="집중해서 일하는 중입니다." /></div><button className="primary-btn" onClick={() => showToast("프로필 저장은 Supabase 연결 후 서버에 반영됩니다.")}>변경사항 저장</button></div><div className="setting-section"><h3>앱 및 알림</h3><p>현재 기기의 설치와 알림 권한을 관리합니다.</p><div className="toggle-line"><div className="toggle-copy"><strong>브라우저 알림</strong><span>{notificationsEnabled ? "이 기기에서 허용됨" : "권한을 요청하지 않았습니다"}</span></div><button className={`switch ${notificationsEnabled ? "on" : ""}`} aria-label="브라우저 알림 켜기" onClick={enableNotifications} /></div><div className="toggle-line"><div className="toggle-copy"><strong>컴팩트 채팅</strong><span>한 화면에 더 많은 메시지를 표시합니다</span></div><button className={`switch ${compact ? "on" : ""}`} aria-label="컴팩트 채팅 전환" onClick={() => setCompact(!compact)} /></div><button className="secondary-btn" style={{ marginTop: 18 }} onClick={install}>이 기기에 PWA 설치</button></div></div></div>
+      <div className="settings-layout"><div className="panel settings-nav">{["내 프로필", "알림", "채팅", "보안", "연결된 기기"].map((item, index) => <button className={index === 0 ? "active" : ""} key={item}>{item}</button>)}</div><div className="panel settings-form"><div className="setting-section"><h3>내 프로필</h3><p>다른 구성원에게 표시되는 기본 정보입니다.</p><div className="form-row"><div className="field"><label>표시 이름</label><input defaultValue="관리자" /></div><div className="field"><label>소속</label><input defaultValue="더함스튜디오" /></div></div><div className="field"><label>상태 메시지</label><input defaultValue="집중해서 일하는 중입니다." /></div><button className="primary-btn" onClick={() => showToast("프로필 수정 API는 다음 운영 업데이트에서 연결됩니다.")}>변경사항 저장</button></div><div className="setting-section"><h3>앱 및 알림</h3><p>현재 기기의 설치와 알림 권한을 관리합니다.</p><div className="toggle-line"><div className="toggle-copy"><strong>브라우저 알림</strong><span>{notificationsEnabled ? "이 기기에서 허용됨" : "권한을 요청하지 않았습니다"}</span></div><button className={`switch ${notificationsEnabled ? "on" : ""}`} aria-label="브라우저 알림 켜기" onClick={enableNotifications} /></div><div className="toggle-line"><div className="toggle-copy"><strong>컴팩트 채팅</strong><span>한 화면에 더 많은 메시지를 표시합니다</span></div><button className={`switch ${compact ? "on" : ""}`} aria-label="컴팩트 채팅 전환" onClick={() => setCompact(!compact)} /></div><button className="secondary-btn" style={{ marginTop: 18 }} onClick={install}>이 기기에 PWA 설치</button></div></div></div>
     </>
   );
 }
 
-function AdminView({ tab, setTab, brand, saveBrand, integration, demo, showToast }: { tab: string; setTab: (tab: string) => void; brand: string; saveBrand: (name: string) => void; integration: IntegrationState; demo: boolean; showToast: (text: string) => void }) {
+function AdminView({ tab, setTab, brand, saveBrand, integration, demo, rooms, showToast }: { tab: string; setTab: (tab: string) => void; brand: string; saveBrand: (name: string) => void; integration: IntegrationState; demo: boolean; rooms: Room[]; showToast: (text: string) => void }) {
   const [name, setName] = useState(brand);
   const [inviteCopied, setInviteCopied] = useState(false);
+  const [members, setMembers] = useState<Array<{ id: string; email: string; display_name: string; organization: string; role: string; status: string }>>([]);
   const tabs = [["overview", "운영 현황"], ["members", "회원 관리"], ["rooms", "채팅방 관리"], ["meetings", "회의 관리"], ["brand", "서비스 설정"], ["security", "보안 로그"]];
+
+  async function loadMembers() {
+    if (demo) return;
+    const response = await fetch("/api/cloudflare/admin/users", { cache: "no-store" });
+    const data = await response.json() as { users?: typeof members; error?: string };
+    if (!response.ok) {
+      showToast(data.error ?? "회원 목록을 불러오지 못했습니다.");
+      return;
+    }
+    setMembers(data.users ?? []);
+  }
+
+  async function createInvitation() {
+    if (demo) {
+      showToast("데모 모드에서는 초대코드를 발급하지 않습니다.");
+      return;
+    }
+    const response = await fetch("/api/cloudflare/admin/invitations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "관리자 발급", maxUses: 1, expiresInDays: 7 }),
+    });
+    const data = await response.json() as { invitation?: { code: string }; error?: string };
+    if (!response.ok || !data.invitation) {
+      showToast(data.error ?? "초대코드를 발급하지 못했습니다.");
+      return;
+    }
+    await navigator.clipboard?.writeText(data.invitation.code);
+    setInviteCopied(true);
+    showToast(`초대코드 ${data.invitation.code}를 복사했습니다. 7일간 1회 사용할 수 있습니다.`);
+    window.setTimeout(() => setInviteCopied(false), 1600);
+  }
+
+  async function changeMemberStatus(id: string, status: "active" | "rejected" | "suspended") {
+    const response = await fetch(`/api/cloudflare/admin/users/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) {
+      showToast(data.error ?? "회원 상태를 변경하지 못했습니다.");
+      return;
+    }
+    showToast(status === "active" ? "가입을 승인했습니다." : "회원 상태를 변경했습니다.");
+    await loadMembers();
+  }
+
   return (
     <>
-      <div className="section-heading"><div><p className="eyebrow">Administrator console</p><h2>관리자 대시보드</h2><p>회원, 채팅방, 회의와 서비스 정책을 운영합니다.</p></div><button className="primary-btn" onClick={() => { navigator.clipboard?.writeText("초대링크는 서버 연결 후 발급됩니다."); setInviteCopied(true); setTimeout(() => setInviteCopied(false), 1600); }}><Link2 size={16} />{inviteCopied ? "안내 복사됨" : "초대링크 만들기"}</button></div>
+      <div className="section-heading"><div><p className="eyebrow">Administrator console</p><h2>관리자 대시보드</h2><p>회원, 채팅방, 회의와 서비스 정책을 운영합니다.</p></div><button className="primary-btn" onClick={() => void createInvitation()}><Link2 size={16} />{inviteCopied ? "초대코드 복사됨" : "초대코드 만들기"}</button></div>
       {demo && <div className="demo-banner"><Info size={16} />데모 관리자 화면입니다. 위험한 운영 변경은 서버 연결 전에는 실행하지 않습니다.</div>}
       <div className="settings-layout">
-        <div className="panel settings-nav">{tabs.map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}</div>
+        <div className="panel settings-nav">{tabs.map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => { setTab(id); if (id === "members") void loadMembers(); }}>{label}</button>)}</div>
         <div className="panel">
-          {tab === "overview" && <><div className="panel-header"><div><h2>운영 현황</h2><p>실제 연결 상태와 데모 지표를 분리해 표시합니다.</p></div></div><div className="stats-grid" style={{ margin: 0 }}>{[["전체 회원", "6"], ["현재 접속", "3"], ["활성 채팅방", "4"], ["신고 대기", "0"]].map(([label, value]) => <div className="stat-card" key={label}><div><p>{label}</p><strong>{value}</strong></div></div>)}</div><div className="setting-section" style={{ marginTop: 24 }}><h3>서비스 연결 상태</h3><p>설정값 존재 여부를 서버에서 확인한 결과입니다.</p>{Object.entries(integration).map(([key, value]) => <div className="toggle-line" key={key}><div className="toggle-copy"><strong>{key}</strong><span>{value ? "연결 설정 확인됨" : "환경변수 설정 필요"}</span></div><span className={`badge ${value ? "" : "warn"}`}>{value ? "준비" : "미연결"}</span></div>)}</div></>}
-          {tab === "members" && <><div className="panel-header"><div><h2>회원 관리</h2><p>가입 승인, 계정 상태와 역할을 관리합니다.</p></div><button className="secondary-btn" onClick={() => showToast("직접 회원 생성은 서버 관리자 권한이 필요합니다.")}><Plus size={16} />회원 생성</button></div><div className="list">{people.slice(0, 5).map((person) => <div className="list-item" key={person.name}><Avatar name={person.name} /><div className="list-item-body"><strong>{person.name}</strong><span>{person.role}</span></div><span className="badge">정상</span><button className="icon-btn" onClick={() => showToast("계정 작업은 감사 로그와 함께 서버에서 처리됩니다.")}><MoreHorizontal size={17} /></button></div>)}</div></>}
-          {tab === "rooms" && <><div className="panel-header"><div><h2>채팅방 관리</h2><p>참여자, 공지, 잠금과 파일 정책을 관리합니다.</p></div></div><div className="list">{initialRooms.map((room) => <div className="list-item" key={room.id}><Avatar name={room.name} /><div className="list-item-body"><strong>{room.name}</strong><span>{room.members}명 · {room.type}</span></div><span className="badge">운영 중</span><button className="icon-btn" onClick={() => showToast("채팅방 변경은 서버 연결 후 반영됩니다.")}><MoreHorizontal size={17} /></button></div>)}</div></>}
+          {tab === "overview" && <><div className="panel-header"><div><h2>운영 현황</h2><p>Cloudflare 운영 데이터와 연결 상태입니다.</p></div></div><div className="stats-grid" style={{ margin: 0 }}>{[["참여 채팅방", String(rooms.length)], ["인증", integration.auth ? "정상" : "점검"], ["실시간 채팅", integration.chat ? "정상" : "점검"], ["파일 저장소", integration.storage ? "정상" : "점검"]].map(([label, value]) => <div className="stat-card" key={label}><div><p>{label}</p><strong>{value}</strong></div></div>)}</div><div className="setting-section" style={{ marginTop: 24 }}><h3>서비스 연결 상태</h3><p>실제 Worker 바인딩과 서버 설정 확인 결과입니다.</p>{Object.entries(integration).map(([key, value]) => <div className="toggle-line" key={key}><div className="toggle-copy"><strong>{key}</strong><span>{value ? "운영 연결 확인됨" : "설정 또는 후속 연결 필요"}</span></div><span className={`badge ${value ? "" : "warn"}`}>{value ? "준비" : "미연결"}</span></div>)}</div></>}
+          {tab === "members" && <><div className="panel-header"><div><h2>회원 관리</h2><p>가입 승인, 계정 상태와 역할을 관리합니다.</p></div><button className="secondary-btn" onClick={() => void loadMembers()}><Users size={16} />새로고침</button></div><div className="list">{(demo ? people.slice(0, 5).map((person, index) => ({ id: String(index), email: person.role, display_name: person.name, organization: "데모", role: "member", status: "active" })) : members).map((person) => <div className="list-item" key={person.id}><Avatar name={person.display_name} /><div className="list-item-body"><strong>{person.display_name}</strong><span>{person.email} · {person.organization || "소속 미입력"}</span></div><span className={`badge ${person.status === "active" ? "" : "warn"}`}>{person.status === "pending" ? "승인 대기" : person.status === "active" ? "정상" : person.status}</span>{!demo && person.status === "pending" && <button className="soft-btn" onClick={() => void changeMemberStatus(person.id, "active")}><Check size={15} />승인</button>}{!demo && person.status === "active" && person.role === "member" && <button className="icon-btn" aria-label="계정 정지" onClick={() => void changeMemberStatus(person.id, "suspended")}><MoreHorizontal size={17} /></button>}</div>)}</div></>}
+          {tab === "rooms" && <><div className="panel-header"><div><h2>채팅방 관리</h2><p>참여자, 공지, 잠금과 파일 정책을 관리합니다.</p></div></div><div className="list">{(demo ? initialRooms : rooms).map((room) => <div className="list-item" key={room.id}><Avatar name={room.name} /><div className="list-item-body"><strong>{room.name}</strong><span>{room.members}명 · {room.type}</span></div><span className="badge">운영 중</span><button className="icon-btn" onClick={() => showToast("채팅방 세부 관리 API는 후속 운영 업데이트에서 연결됩니다.")}><MoreHorizontal size={17} /></button></div>)}</div></>}
           {tab === "meetings" && <><div className="panel-header"><div><h2>회의 관리</h2><p>진행 중 회의와 예약 이력을 확인합니다.</p></div></div>{integration.video ? <div className="list"><div className="list-item"><span className="stat-icon"><Video size={18} /></span><div className="list-item-body"><strong>현재 진행 중인 회의가 없습니다</strong><span>회의가 시작되면 참가자와 방장 정보가 표시됩니다.</span></div></div></div> : <div className="empty-state"><VideoOff size={34} /><h3>영상 제공자 미연결</h3><p>RealtimeKit 서버 자격 증명을 설정하면 회의 운영 화면이 활성화됩니다.</p></div>}</>}
           {tab === "brand" && <div className="settings-form"><div className="setting-section"><h3>브랜드 설정</h3><p>서비스 전체에 표시되는 이름과 메시지를 관리합니다.</p><div className="field"><label>서비스명</label><input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} /></div><div className="form-row"><div className="field"><label>대표 컬러</label><input type="color" defaultValue="#21151B" /></div><div className="field"><label>포인트 컬러</label><input type="color" defaultValue="#D71962" /></div></div><div className="field"><label>메인 문구</label><textarea defaultValue="대화와 회의를 하나의 안전한 공간에서." /></div><button className="primary-btn" onClick={() => saveBrand(name)}>브랜드 적용</button></div><div className="setting-section"><h3>운영 정책</h3><p>서비스 공개 문서는 배포 전 법률 전문가 검토가 필요합니다.</p><button className="secondary-btn" onClick={() => showToast("개인정보처리방침 초안은 docs 폴더에 포함되어 있습니다.")}>정책 문서 확인</button></div></div>}
           {tab === "security" && <><div className="panel-header"><div><h2>보안 로그</h2><p>관리자 활동과 인증 경고를 확인합니다.</p></div></div><div className="list">{[["관리자 로그인", "현재 기기 · 방금"], ["서비스 설정 조회", "관리자 · 3분 전"], ["초대코드 생성 시도", "데모 모드 · 5분 전"]].map(([title, body]) => <div className="list-item" key={title}><span className="stat-icon"><ShieldCheck size={18} /></span><div className="list-item-body"><strong>{title}</strong><span>{body}</span></div></div>)}</div></>}
