@@ -87,6 +87,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .full { width: 100%; }
 .text-btn { border: 0; background: none; color: var(--pink); font-weight: 750; padding: 8px; }
 .login-links { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; font-size: 13px; }
+.entry-choice { min-height: 54px; margin-top: 10px; justify-content: center; font-size: 15px; }
+.admin-invite-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.admin-invite-actions select { min-width: 190px; min-height: 42px; border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; background: white; color: var(--ink); }
+.inline-room-form { display: flex; align-items: end; gap: 12px; padding: 16px; margin-bottom: 18px; border-radius: 16px; background: var(--soft); }
+.inline-room-form .field { flex: 1; margin: 0; }
+.demo-banner code { padding: 4px 8px; border-radius: 8px; background: white; font-weight: 750; letter-spacing: .08em; }
 .setup-note { margin-top: 24px; padding: 14px; border-radius: 14px; background: #fff8e9; border: 1px solid #f1d59d; color: #795719; font-size: 12px; line-height: 1.6; }
 .demo-entry { margin-top: 14px; }
 
@@ -326,6 +332,8 @@ button.list-item:hover { background: #faf7f9; }
   .login-copy h1 { font-size: 36px; }
   .security-strip { display: none; }
   .login-card { border-radius: 22px; padding: 25px 20px; }
+  .admin-invite-actions, .inline-room-form { align-items: stretch; flex-direction: column; }
+  .admin-invite-actions select { width: 100%; }
   .form-row { grid-template-columns: 1fr; gap: 0; }
   .page-title span { display: none; }
   .stats-grid, .cards-grid, .contact-grid { grid-template-columns: 1fr; }

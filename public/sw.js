@@ -1,4 +1,4 @@
-const CACHE = "private-talk-shell-v3-cloudflare";
+const CACHE = "private-talk-shell-v4-invite-entry";
 const SHELL = ["/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {

@@ -8,6 +8,7 @@ import handler from "vinext/server/app-router-entry";
 
 type AppEnv = Env & {
   BOOTSTRAP_TOKEN?: string;
+  MASTER_PIN?: string;
   REALTIMEKIT_API_KEY?: string;
   REALTIMEKIT_ORG_ID?: string;
   IMAGES: {
@@ -473,6 +474,97 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     return json({ authenticated: Boolean(user), user });
   }
 
+  if (url.pathname === "/api/cloudflare/master-login" && request.method === "POST") {
+    const body = await readJsonBody<{ pin?: unknown }>(request);
+    const pin = String(body.pin ?? "");
+    const keyHash = await sha256(`${requestIp(request)}:master`);
+    const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const attempts = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM auth_attempts WHERE key_hash = ? AND attempted_at > ? AND success = 0",
+    ).bind(keyHash, windowStart).first<{ count: number }>();
+    if ((attempts?.count ?? 0) >= 5) {
+      throw new HttpError(429, "관리자 비밀번호 입력 횟수를 초과했습니다. 15분 후 다시 시도해 주세요.");
+    }
+    const valid = Boolean(env.MASTER_PIN) && await sha256(pin) === await sha256(env.MASTER_PIN!);
+    await env.DB.prepare("INSERT INTO auth_attempts (key_hash, attempted_at, success) VALUES (?, ?, ?)")
+      .bind(keyHash, new Date().toISOString(), valid ? 1 : 0).run();
+    if (!valid) throw new HttpError(401, "마스터 관리자 비밀번호가 올바르지 않습니다.");
+    const user = await env.DB.prepare(`
+      SELECT id, email, display_name, organization, role, status
+      FROM users WHERE role = 'super_admin' AND status = 'active' LIMIT 1
+    `).first<AppUser>();
+    if (!user) throw new HttpError(503, "마스터 관리자 계정이 준비되지 않았습니다.");
+    const token = await createSession(env, request, user.id);
+    ctx.waitUntil(audit(env, request, user.id, "auth.master_login", "session", null));
+    return json({ user }, 200, { "Set-Cookie": sessionCookie(token) });
+  }
+
+  if (url.pathname === "/api/cloudflare/join" && request.method === "POST") {
+    const body = await readJsonBody<{ code?: unknown }>(request);
+    const code = normalizeInvite(body.code);
+    const now = new Date().toISOString();
+    const invitation = await env.DB.prepare(`
+      SELECT i.id, i.room_id, r.name AS room_name
+      FROM invitations i
+      JOIN rooms r ON r.id = i.room_id
+      WHERE i.code_hash = ? AND i.revoked_at IS NULL AND i.expires_at > ?
+        AND i.use_count < i.max_uses AND r.archived_at IS NULL
+    `).bind(await sha256(code), now).first<{ id: string; room_id: string; room_name: string }>();
+    if (!invitation) throw new HttpError(404, "유효하지 않거나 만료된 초대번호입니다.");
+
+    const consumed = await env.DB.prepare(`
+      UPDATE invitations SET use_count = use_count + 1
+      WHERE id = ? AND use_count < max_uses AND revoked_at IS NULL AND expires_at > ?
+    `).bind(invitation.id, now).run();
+    if ((consumed.meta.changes ?? 0) !== 1) {
+      throw new HttpError(409, "이미 사용된 초대번호입니다.");
+    }
+
+    const userId = crypto.randomUUID();
+    const guestNumber = String(crypto.getRandomValues(new Uint32Array(1))[0] % 10_000).padStart(4, "0");
+    const displayName = `참여자 ${guestNumber}`;
+    const randomCredential = await hashPassword(randomToken(24));
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO users (
+          id, email, display_name, organization, role, status,
+          password_hash, password_salt, password_iterations,
+          created_at, updated_at, approved_at
+        ) VALUES (?, ?, ?, '', 'member', 'active', ?, ?, ?, ?, ?, ?)
+      `).bind(
+        userId,
+        `guest-${userId}@invite.local`,
+        displayName,
+        randomCredential.hash,
+        randomCredential.salt,
+        randomCredential.iterations,
+        now,
+        now,
+        now,
+      ),
+      env.DB.prepare(`
+        INSERT INTO room_members (room_id, user_id, role, joined_at)
+        VALUES (?, ?, 'member', ?)
+      `).bind(invitation.room_id, userId, now),
+    ]);
+    const token = await createSession(env, request, userId);
+    const user: AppUser = {
+      id: userId,
+      email: "",
+      display_name: displayName,
+      organization: "",
+      role: "member",
+      status: "active",
+    };
+    await audit(env, request, userId, "invitation.joined", "room", invitation.room_id, {
+      invitationId: invitation.id,
+    });
+    return json({
+      user,
+      room: { id: invitation.room_id, name: invitation.room_name },
+    }, 201, { "Set-Cookie": sessionCookie(token) });
+  }
+
   if (url.pathname === "/api/cloudflare/login" && request.method === "POST") {
     const body = await readJsonBody<{ email?: unknown; password?: unknown }>(request);
     const email = normalizeEmail(body.email);
@@ -741,7 +833,12 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
 
   if (url.pathname === "/api/cloudflare/admin/invitations" && request.method === "POST") {
     requireAdmin(user);
-    const body = await readJsonBody<{ label?: unknown; maxUses?: unknown; expiresInDays?: unknown }>(request);
+    const body = await readJsonBody<{ label?: unknown; roomId?: unknown; maxUses?: unknown; expiresInDays?: unknown }>(request);
+    const roomId = String(body.roomId ?? "");
+    const room = await env.DB.prepare(
+      "SELECT id, name FROM rooms WHERE id = ? AND archived_at IS NULL",
+    ).bind(roomId).first<{ id: string; name: string }>();
+    if (!room) throw new HttpError(404, "초대할 채팅방을 찾을 수 없습니다.");
     const maxUses = Math.min(Math.max(Number(body.maxUses) || 1, 1), 100);
     const days = Math.min(Math.max(Number(body.expiresInDays) || 7, 1), 90);
     const raw = randomToken(12).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
@@ -749,19 +846,20 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const id = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
     await env.DB.prepare(`
-      INSERT INTO invitations (id, code_hash, label, max_uses, expires_at, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invitations (id, code_hash, label, room_id, max_uses, expires_at, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
       await sha256(normalizeInvite(code)),
       String(body.label ?? "").trim().slice(0, 80),
+      roomId,
       maxUses,
       expiresAt,
       user.id,
       new Date().toISOString(),
     ).run();
-    await audit(env, request, user.id, "invitation.created", "invitation", id, { maxUses, expiresAt });
-    return json({ invitation: { id, code, maxUses, expiresAt } }, 201);
+    await audit(env, request, user.id, "invitation.created", "invitation", id, { roomId, maxUses, expiresAt });
+    return json({ invitation: { id, code, roomId, roomName: room.name, maxUses, expiresAt } }, 201);
   }
 
   if (url.pathname === "/api/cloudflare/admin/rooms" && request.method === "POST") {

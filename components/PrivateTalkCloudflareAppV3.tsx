@@ -10,7 +10,7 @@ import {
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type View = "dashboard" | "chat" | "meetings" | "contacts" | "notifications" | "files" | "settings" | "admin";
-type LoginMode = "login" | "invite" | "request";
+type LoginMode = "home" | "master" | "invite";
 type Room = { id: string; name: string; preview: string; time: string; unread: number; members: number; type: "direct" | "group" | "notice" };
 type ChatMessage = { id: string; author: string; text: string; time: string; mine?: boolean };
 type IntegrationState = { cloudflare: boolean; auth: boolean; chat: boolean; video: boolean; storage: boolean; webPush: boolean };
@@ -34,21 +34,6 @@ const initialRooms: Room[] = [
   { id: "partner", name: "파트너 협의회", preview: "박준호님이 파일을 공유했습니다.", time: "화", unread: 0, members: 12, type: "group" },
 ];
 
-const seedMessages: Record<string, ChatMessage[]> = {
-  design: [
-    { id: "m1", author: "김민서", text: "오전 회의에서 정리한 브랜드 가이드 초안을 공유드렸어요.", time: "오전 10:14" },
-    { id: "m2", author: "나", text: "확인했습니다. 메인 컬러 대비만 조금 더 살펴볼게요.", time: "오전 10:19", mine: true },
-    { id: "m3", author: "박준호", text: "모바일 화면도 같이 캡처해서 회의 자료에 넣겠습니다.", time: "오전 10:31" },
-    { id: "m4", author: "김민서", text: "좋아요. 시안 검토는 오후 회의에서 함께 볼게요.", time: "오전 10:42" },
-  ],
-  minseo: [
-    { id: "m5", author: "김민서", text: "요청하신 자료를 전달드렸습니다.", time: "오전 9:12" },
-    { id: "m6", author: "나", text: "자료 잘 받았습니다. 감사합니다!", time: "오전 9:18", mine: true },
-  ],
-  notice: [{ id: "m7", author: "관리자", text: "7월 보안 점검은 금요일 오후 7시에 진행됩니다. 점검 중에는 약 10분간 접속이 제한될 수 있습니다.", time: "어제 오후 4:00" }],
-  partner: [{ id: "m8", author: "박준호", text: "파트너 계약 검토용 파일을 공유했습니다.", time: "화요일 오후 2:18" }],
-};
-
 const people = [
   { name: "김민서", role: "브랜드 전략 · 더함스튜디오", status: "online", initial: "민" },
   { name: "박준호", role: "프로덕트 매니저 · 플랫폼팀", status: "online", initial: "준" },
@@ -56,12 +41,6 @@ const people = [
   { name: "최도윤", role: "파트너 · 외부 협력사", status: "offline", initial: "도" },
   { name: "정하린", role: "운영 매니저 · 커뮤니티팀", status: "online", initial: "하" },
   { name: "강유진", role: "보안 담당 · 인프라팀", status: "offline", initial: "유" },
-];
-
-const meetings = [
-  { id: "meet-1", time: "14:00", date: "오늘", title: "브랜드 프로젝트 주간회의", desc: "브랜드 프로젝트 TF · 8명 초대", secure: true },
-  { id: "meet-2", time: "16:30", date: "오늘", title: "신규 파트너 온보딩", desc: "파트너 협의회 · 5명 초대", secure: true },
-  { id: "meet-3", time: "10:00", date: "내일", title: "서비스 운영 점검", desc: "운영팀 · 6명 초대", secure: false },
 ];
 
 function initials(name: string) {
@@ -86,7 +65,7 @@ export function PrivateTalkApp() {
   const [signedIn, setSignedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [demoMode, setDemoMode] = useState(false);
-  const [loginMode, setLoginMode] = useState<LoginMode>("login");
+  const [loginMode, setLoginMode] = useState<LoginMode>("home");
   const [view, setView] = useState<View>("dashboard");
   const [brandName, setBrandName] = useState("THEHAM PRIVATE TALK");
   const [activeRoom, setActiveRoom] = useState("design");
@@ -101,7 +80,6 @@ export function PrivateTalkApp() {
   const [micOn, setMicOn] = useState(true);
   const [settingsTab, setSettingsTab] = useState("brand");
   const [integration, setIntegration] = useState<IntegrationState>({ cloudflare: false, auth: false, chat: false, video: false, storage: false, webPush: false });
-  const [inviteCode, setInviteCode] = useState("");
   const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [scheduled, setScheduled] = useState<ScheduledMeeting[]>([]);
@@ -122,6 +100,7 @@ export function PrivateTalkApp() {
         if (data.authenticated && data.user) {
           setCurrentUser(data.user);
           setSignedIn(true);
+          setView(data.user.role === "super_admin" || data.user.role === "admin" ? "admin" : "chat");
         }
       })
       .catch(() => undefined);
@@ -208,19 +187,15 @@ export function PrivateTalkApp() {
 
   function showToast(message: string) { setToast(message); }
 
-  async function handleLogin(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const email = String(form.get("email") ?? "");
-    const password = String(form.get("password") ?? "");
-    const response = await fetch("/api/cloudflare/login", {
+  async function handleMasterAccess(pin: string) {
+    const response = await fetch("/api/cloudflare/master-login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ pin }),
     });
     const data = await response.json() as { user?: CurrentUser; error?: string };
     if (!response.ok || !data.user) {
-      showToast(data.error ?? "로그인에 실패했습니다.");
+      showToast(data.error ?? "마스터 관리자 입장에 실패했습니다.");
       return;
     }
     setCurrentUser(data.user);
@@ -228,16 +203,30 @@ export function PrivateTalkApp() {
     setRooms([]);
     setMessages({});
     setScheduled([]);
+    setView("admin");
     setSignedIn(true);
   }
 
-  function enterDemo() {
-    setDemoMode(true);
-    setRooms(initialRooms);
-    setMessages(seedMessages);
-    setScheduled(meetings);
+  async function handleInviteJoin(code: string) {
+    const response = await fetch("/api/cloudflare/join", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const data = await response.json() as { user?: CurrentUser; room?: { id: string; name: string }; error?: string };
+    if (!response.ok || !data.user || !data.room) {
+      showToast(data.error ?? "초대번호로 입장하지 못했습니다.");
+      return;
+    }
+    setCurrentUser(data.user);
+    setDemoMode(false);
+    setRooms([]);
+    setMessages({});
+    setScheduled([]);
+    setActiveRoom(data.room.id);
+    setView("chat");
     setSignedIn(true);
-    showToast("읽기·체험용 데모 모드로 입장했습니다.");
+    showToast(`${data.room.name} 방에 입장했습니다.`);
   }
 
   function logout() {
@@ -355,7 +344,7 @@ export function PrivateTalkApp() {
   }
 
   if (!ready) return <div className="loading-screen"><div className="loading-mark"><div className="loading-dot" />PRIVATE TALK</div></div>;
-  if (!signedIn) return <LoginScreen mode={loginMode} setMode={setLoginMode} onLogin={handleLogin} onDemo={enterDemo} configured={integration.auth} brand={brandName} showToast={showToast} toast={toast} inviteCode={inviteCode} setInviteCode={setInviteCode} />;
+  if (!signedIn) return <LoginScreen mode={loginMode} setMode={setLoginMode} onMasterAccess={handleMasterAccess} onInviteJoin={handleInviteJoin} configured={integration.auth} brand={brandName} toast={toast} />;
 
   return (
     <div className="app-shell">
@@ -402,7 +391,7 @@ export function PrivateTalkApp() {
           {view === "notifications" && <NotificationsView demo={demoMode} showToast={showToast} />}
           {view === "files" && <FilesView storage={integration.storage} roomId={activeRoom} demo={demoMode} showToast={showToast} />}
           {view === "settings" && <SettingsView install={installApp} notificationsEnabled={notificationsEnabled} enableNotifications={enableNotifications} showToast={showToast} />}
-          {view === "admin" && <AdminView tab={settingsTab} setTab={setSettingsTab} brand={brandName} saveBrand={(name) => { setBrandName(name || "THEHAM PRIVATE TALK"); showToast("브랜드 설정을 현재 세션에 적용했습니다."); }} integration={integration} demo={demoMode} rooms={rooms} showToast={showToast} />}
+          {view === "admin" && <AdminView tab={settingsTab} setTab={setSettingsTab} brand={brandName} saveBrand={(name) => { setBrandName(name || "THEHAM PRIVATE TALK"); showToast("브랜드 설정을 현재 세션에 적용했습니다."); }} integration={integration} demo={demoMode} rooms={rooms} onRoomCreated={(room) => { setRooms((current) => [...current, room]); setActiveRoom(room.id); }} showToast={showToast} />}
         </div>
       </main>
 
@@ -421,49 +410,15 @@ export function PrivateTalkApp() {
   );
 }
 
-function LoginScreen({ mode, setMode, onLogin, onDemo, configured, brand, showToast, toast, inviteCode, setInviteCode }: {
-  mode: LoginMode; setMode: (mode: LoginMode) => void; onLogin: (event: FormEvent<HTMLFormElement>) => void; onDemo: () => void; configured: boolean; brand: string; showToast: (text: string) => void; toast: string; inviteCode: string; setInviteCode: (value: string) => void;
+function LoginScreen({ mode, setMode, onMasterAccess, onInviteJoin, configured, brand, toast }: {
+  mode: LoginMode;
+  setMode: (mode: LoginMode) => void;
+  onMasterAccess: (pin: string) => Promise<void>;
+  onInviteJoin: (code: string) => Promise<void>;
+  configured: boolean;
+  brand: string;
+  toast: string;
 }) {
-  async function verifyInvitation(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const code = String(new FormData(event.currentTarget).get("invite") ?? "");
-    const response = await fetch("/api/cloudflare/invitations/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
-    const data = await response.json() as { error?: string };
-    if (!response.ok) {
-      showToast(data.error ?? "초대코드를 확인하지 못했습니다.");
-      return;
-    }
-    setInviteCode(code);
-    setMode("request");
-  }
-
-  async function requestRegistration(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const response = await fetch("/api/cloudflare/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code: inviteCode,
-        displayName: form.get("displayName"),
-        organization: form.get("organization"),
-        email: form.get("email"),
-        password: form.get("password"),
-      }),
-    });
-    const data = await response.json() as { error?: string };
-    if (!response.ok) {
-      showToast(data.error ?? "가입 요청을 처리하지 못했습니다.");
-      return;
-    }
-    showToast("가입 요청이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.");
-    setMode("login");
-  }
-
   return (
     <div className="login-shell">
       <section className="login-visual">
@@ -471,47 +426,47 @@ function LoginScreen({ mode, setMode, onLogin, onDemo, configured, brand, showTo
         <div className="login-copy">
           <p className="eyebrow">Private communication suite</p>
           <h1>우리만의 안전한<br />대화 공간.</h1>
-          <p>실시간 채팅과 영상회의, 파일 공유를 하나의 비공개 플랫폼에서 연결합니다. 초대받고 승인된 구성원만 함께할 수 있습니다.</p>
+          <p>관리자가 방을 만들고 초대번호를 전달하면, 참여자는 별도 가입이나 로그인 없이 해당 방으로 바로 입장합니다.</p>
         </div>
-        <div className="security-strip"><span><ShieldCheck size={16} />초대 기반 가입</span><span><LockKeyhole size={16} />서버 권한 검증</span><span><Video size={16} />안전한 회의 토큰</span></div>
+        <div className="security-strip"><span><ShieldCheck size={16} />초대번호 입장</span><span><LockKeyhole size={16} />서버 권한 검증</span><span><MessageCircle size={16} />실시간 비공개 채팅</span></div>
       </section>
       <section className="login-panel">
         <div className="login-card">
-          {mode === "login" && (
+          {mode === "home" && (
             <>
-              <p className="eyebrow">Welcome back</p><h2>다시 만나 반갑습니다</h2><p>승인된 계정으로 비공개 공간에 접속하세요.</p>
-              <form onSubmit={onLogin}>
-                <div className="field"><label htmlFor="email">이메일</label><input id="email" name="email" type="email" autoComplete="username" placeholder="name@company.com" required /></div>
-                <div className="field"><label htmlFor="password">비밀번호</label><input id="password" name="password" type="password" autoComplete="current-password" placeholder="비밀번호를 입력하세요" required minLength={8} /></div>
-                <button className="primary-btn full" type="submit">로그인</button>
-              </form>
-              <div className="login-links"><button className="text-btn" onClick={() => showToast("관리자에게 비밀번호 초기화를 요청해 주세요.")}>비밀번호 찾기</button><button className="text-btn" onClick={() => setMode("invite")}>초대코드로 가입</button></div>
+              <p className="eyebrow">Choose entrance</p>
+              <h2>어떻게 입장하시겠어요?</h2>
+              <p>관리자는 방과 초대번호를 관리하고, 참여자는 받은 번호만 입력하면 됩니다.</p>
+              <button className="primary-btn full entry-choice" onClick={() => setMode("invite")}><Link2 size={18} />초대번호로 바로 입장</button>
+              <button className="secondary-btn full entry-choice" onClick={() => setMode("master")}><ShieldCheck size={18} />마스터 관리자</button>
               {configured
-                ? <div className="setup-note"><strong>Cloudflare 운영 연결 완료</strong><br />실제 계정, 가입 승인, 세션과 채팅이 Cloudflare에서 동작합니다.</div>
+                ? <div className="setup-note"><strong>Cloudflare 운영 연결 완료</strong><br />초대번호와 방 권한은 서버에서 검증됩니다.</div>
                 : <div className="setup-note"><strong>서버 점검 중</strong><br />Cloudflare 인증 서버 연결을 확인하고 있습니다. 잠시 후 다시 시도해 주세요.</div>}
-              <button className="secondary-btn full demo-entry" onClick={onDemo}>제품 둘러보기 · 데모 모드</button>
             </>
           )}
           {mode === "invite" && (
             <>
-              <button className="text-btn" onClick={() => setMode("login")}><ChevronLeft size={16} />로그인으로</button>
-              <p className="eyebrow" style={{ marginTop: 20 }}>Invitation only</p><h2>초대코드 확인</h2><p>관리자에게 받은 유효한 초대코드를 입력해 주세요.</p>
-              <form onSubmit={verifyInvitation}>
-                <div className="field"><label htmlFor="invite">초대코드</label><input id="invite" name="invite" placeholder="XXXX-XXXX-XXXX" required /></div>
-                <button className="primary-btn full" type="submit">초대코드 확인</button>
+              <button className="text-btn" onClick={() => setMode("home")}><ChevronLeft size={16} />처음으로</button>
+              <p className="eyebrow" style={{ marginTop: 20 }}>Invitation entrance</p><h2>초대번호로 입장</h2><p>관리자에게 받은 번호를 입력하면 연결된 방으로 바로 이동합니다.</p>
+              <form onSubmit={(event) => {
+                event.preventDefault();
+                void onInviteJoin(String(new FormData(event.currentTarget).get("invite") ?? ""));
+              }}>
+                <div className="field"><label htmlFor="invite">초대번호</label><input id="invite" name="invite" autoComplete="one-time-code" placeholder="XXXX-XXXX-XXXX" required /></div>
+                <button className="primary-btn full" type="submit">바로 입장하기</button>
               </form>
             </>
           )}
-          {mode === "request" && (
+          {mode === "master" && (
             <>
-              <button className="text-btn" onClick={() => setMode("invite")}><ChevronLeft size={16} />이전</button>
-              <p className="eyebrow" style={{ marginTop: 20 }}>Join request</p><h2>가입 승인 요청</h2><p>관리자가 확인할 기본 정보를 입력해 주세요.</p>
-              <form onSubmit={requestRegistration}>
-                <div className="field"><label htmlFor="register-name">이름</label><input id="register-name" name="displayName" required minLength={2} maxLength={60} /></div>
-                <div className="field"><label htmlFor="register-org">소속</label><input id="register-org" name="organization" required maxLength={100} /></div>
-                <div className="field"><label htmlFor="register-email">이메일</label><input id="register-email" name="email" type="email" autoComplete="username" required /></div>
-                <div className="field"><label htmlFor="register-password">비밀번호</label><input id="register-password" name="password" type="password" autoComplete="new-password" required minLength={10} maxLength={128} placeholder="영문·숫자를 포함해 10자 이상" /></div>
-                <button className="primary-btn full" type="submit">승인 요청</button>
+              <button className="text-btn" onClick={() => setMode("home")}><ChevronLeft size={16} />처음으로</button>
+              <p className="eyebrow" style={{ marginTop: 20 }}>Master console</p><h2>마스터 관리자</h2><p>관리자 비밀번호를 입력하면 초대번호와 채팅방을 관리할 수 있습니다.</p>
+              <form onSubmit={(event) => {
+                event.preventDefault();
+                void onMasterAccess(String(new FormData(event.currentTarget).get("pin") ?? ""));
+              }}>
+                <div className="field"><label htmlFor="master-pin">관리자 비밀번호</label><input id="master-pin" name="pin" type="password" inputMode="numeric" autoComplete="current-password" minLength={4} maxLength={12} required /></div>
+                <button className="primary-btn full" type="submit"><ShieldCheck size={17} />관리자 입장</button>
               </form>
             </>
           )}
@@ -662,9 +617,12 @@ function SettingsView({ install, notificationsEnabled, enableNotifications, show
   );
 }
 
-function AdminView({ tab, setTab, brand, saveBrand, integration, demo, rooms, showToast }: { tab: string; setTab: (tab: string) => void; brand: string; saveBrand: (name: string) => void; integration: IntegrationState; demo: boolean; rooms: Room[]; showToast: (text: string) => void }) {
+function AdminView({ tab, setTab, brand, saveBrand, integration, demo, rooms, onRoomCreated, showToast }: { tab: string; setTab: (tab: string) => void; brand: string; saveBrand: (name: string) => void; integration: IntegrationState; demo: boolean; rooms: Room[]; onRoomCreated: (room: Room) => void; showToast: (text: string) => void }) {
   const [name, setName] = useState(brand);
   const [inviteCopied, setInviteCopied] = useState(false);
+  const [selectedRoomId, setSelectedRoomId] = useState("");
+  const [roomName, setRoomName] = useState("");
+  const [latestInvitation, setLatestInvitation] = useState<{ code: string; roomName: string } | null>(null);
   const [members, setMembers] = useState<Array<{ id: string; email: string; display_name: string; organization: string; role: string; status: string }>>([]);
   const tabs = [["overview", "운영 현황"], ["members", "회원 관리"], ["rooms", "채팅방 관리"], ["meetings", "회의 관리"], ["brand", "서비스 설정"], ["security", "보안 로그"]];
 
@@ -679,25 +637,53 @@ function AdminView({ tab, setTab, brand, saveBrand, integration, demo, rooms, sh
     setMembers(data.users ?? []);
   }
 
-  async function createInvitation() {
+  async function createInvitation(roomOverride?: string) {
     if (demo) {
       showToast("데모 모드에서는 초대코드를 발급하지 않습니다.");
+      return;
+    }
+    const roomId = roomOverride || selectedRoomId || rooms[0]?.id || "";
+    if (!roomId) {
+      showToast("먼저 초대할 채팅방을 만들어 주세요.");
+      setTab("rooms");
       return;
     }
     const response = await fetch("/api/cloudflare/admin/invitations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label: "관리자 발급", maxUses: 1, expiresInDays: 7 }),
+      body: JSON.stringify({ label: "마스터 관리자 발급", roomId, maxUses: 1, expiresInDays: 7 }),
     });
-    const data = await response.json() as { invitation?: { code: string }; error?: string };
+    const data = await response.json() as { invitation?: { code: string; roomName: string }; error?: string };
     if (!response.ok || !data.invitation) {
       showToast(data.error ?? "초대코드를 발급하지 못했습니다.");
       return;
     }
     await navigator.clipboard?.writeText(data.invitation.code);
+    setLatestInvitation(data.invitation);
     setInviteCopied(true);
-    showToast(`초대코드 ${data.invitation.code}를 복사했습니다. 7일간 1회 사용할 수 있습니다.`);
+    showToast(`${data.invitation.roomName} 초대번호 ${data.invitation.code}를 복사했습니다.`);
     window.setTimeout(() => setInviteCopied(false), 1600);
+  }
+
+  async function createRoom(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextName = roomName.trim();
+    if (!nextName) return;
+    const response = await fetch("/api/cloudflare/admin/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nextName, description: "초대번호로 입장하는 비공개 채팅방" }),
+    });
+    const data = await response.json() as { room?: Room; error?: string };
+    if (!response.ok || !data.room) {
+      showToast(data.error ?? "채팅방을 만들지 못했습니다.");
+      return;
+    }
+    const room = { ...data.room, preview: "대화를 시작해 보세요.", time: "", unread: 0 };
+    onRoomCreated(room);
+    setSelectedRoomId(room.id);
+    setRoomName("");
+    showToast(`${room.name} 방을 만들었습니다. 이제 초대번호를 생성할 수 있습니다.`);
   }
 
   async function changeMemberStatus(id: string, status: "active" | "rejected" | "suspended") {
@@ -717,14 +703,15 @@ function AdminView({ tab, setTab, brand, saveBrand, integration, demo, rooms, sh
 
   return (
     <>
-      <div className="section-heading"><div><p className="eyebrow">Administrator console</p><h2>관리자 대시보드</h2><p>회원, 채팅방, 회의와 서비스 정책을 운영합니다.</p></div><button className="primary-btn" onClick={() => void createInvitation()}><Link2 size={16} />{inviteCopied ? "초대코드 복사됨" : "초대코드 만들기"}</button></div>
+      <div className="section-heading"><div><p className="eyebrow">Master administrator</p><h2>마스터 관리자</h2><p>채팅방을 만들고 해당 방으로 바로 연결되는 초대번호를 생성합니다.</p></div><div className="admin-invite-actions"><select aria-label="초대할 채팅방" value={selectedRoomId || rooms[0]?.id || ""} onChange={(event) => setSelectedRoomId(event.target.value)}><option value="">방 선택</option>{rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}</select><button className="primary-btn" onClick={() => void createInvitation()}><Link2 size={16} />{inviteCopied ? "초대번호 복사됨" : "초대번호 만들기"}</button></div></div>
+      {latestInvitation && <div className="demo-banner"><Link2 size={16} /><strong>{latestInvitation.roomName}</strong> 초대번호: <code>{latestInvitation.code}</code><button className="text-btn" onClick={() => void navigator.clipboard?.writeText(latestInvitation.code)}>복사</button></div>}
       {demo && <div className="demo-banner"><Info size={16} />데모 관리자 화면입니다. 위험한 운영 변경은 서버 연결 전에는 실행하지 않습니다.</div>}
       <div className="settings-layout">
         <div className="panel settings-nav">{tabs.map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => { setTab(id); if (id === "members") void loadMembers(); }}>{label}</button>)}</div>
         <div className="panel">
           {tab === "overview" && <><div className="panel-header"><div><h2>운영 현황</h2><p>Cloudflare 운영 데이터와 연결 상태입니다.</p></div></div><div className="stats-grid" style={{ margin: 0 }}>{[["참여 채팅방", String(rooms.length)], ["인증", integration.auth ? "정상" : "점검"], ["실시간 채팅", integration.chat ? "정상" : "점검"], ["파일 저장소", integration.storage ? "정상" : "점검"]].map(([label, value]) => <div className="stat-card" key={label}><div><p>{label}</p><strong>{value}</strong></div></div>)}</div><div className="setting-section" style={{ marginTop: 24 }}><h3>서비스 연결 상태</h3><p>실제 Worker 바인딩과 서버 설정 확인 결과입니다.</p>{Object.entries(integration).map(([key, value]) => <div className="toggle-line" key={key}><div className="toggle-copy"><strong>{key}</strong><span>{value ? "운영 연결 확인됨" : "설정 또는 후속 연결 필요"}</span></div><span className={`badge ${value ? "" : "warn"}`}>{value ? "준비" : "미연결"}</span></div>)}</div></>}
           {tab === "members" && <><div className="panel-header"><div><h2>회원 관리</h2><p>가입 승인, 계정 상태와 역할을 관리합니다.</p></div><button className="secondary-btn" onClick={() => void loadMembers()}><Users size={16} />새로고침</button></div><div className="list">{(demo ? people.slice(0, 5).map((person, index) => ({ id: String(index), email: person.role, display_name: person.name, organization: "데모", role: "member", status: "active" })) : members).map((person) => <div className="list-item" key={person.id}><Avatar name={person.display_name} /><div className="list-item-body"><strong>{person.display_name}</strong><span>{person.email} · {person.organization || "소속 미입력"}</span></div><span className={`badge ${person.status === "active" ? "" : "warn"}`}>{person.status === "pending" ? "승인 대기" : person.status === "active" ? "정상" : person.status}</span>{!demo && person.status === "pending" && <button className="soft-btn" onClick={() => void changeMemberStatus(person.id, "active")}><Check size={15} />승인</button>}{!demo && person.status === "active" && person.role === "member" && <button className="icon-btn" aria-label="계정 정지" onClick={() => void changeMemberStatus(person.id, "suspended")}><MoreHorizontal size={17} /></button>}</div>)}</div></>}
-          {tab === "rooms" && <><div className="panel-header"><div><h2>채팅방 관리</h2><p>참여자, 공지, 잠금과 파일 정책을 관리합니다.</p></div></div><div className="list">{(demo ? initialRooms : rooms).map((room) => <div className="list-item" key={room.id}><Avatar name={room.name} /><div className="list-item-body"><strong>{room.name}</strong><span>{room.members}명 · {room.type}</span></div><span className="badge">운영 중</span><button className="icon-btn" onClick={() => showToast("채팅방 세부 관리 API는 후속 운영 업데이트에서 연결됩니다.")}><MoreHorizontal size={17} /></button></div>)}</div></>}
+          {tab === "rooms" && <><div className="panel-header"><div><h2>채팅방 관리</h2><p>새 방을 만든 뒤 상단에서 그 방의 초대번호를 생성하세요.</p></div></div><form className="inline-room-form" onSubmit={createRoom}><div className="field"><label htmlFor="new-room-name">새 채팅방 이름</label><input id="new-room-name" value={roomName} onChange={(event) => setRoomName(event.target.value)} placeholder="예: 프로젝트 소통방" minLength={2} maxLength={80} required /></div><button className="primary-btn" type="submit"><Plus size={16} />방 만들기</button></form><div className="list">{(demo ? initialRooms : rooms).map((room) => <div className="list-item" key={room.id}><Avatar name={room.name} /><div className="list-item-body"><strong>{room.name}</strong><span>{room.members}명 · {room.type}</span></div><span className="badge">운영 중</span><button className="soft-btn" onClick={() => { setSelectedRoomId(room.id); void createInvitation(room.id); }}><Link2 size={15} />초대번호</button></div>)}</div></>}
           {tab === "meetings" && <><div className="panel-header"><div><h2>회의 관리</h2><p>진행 중 회의와 예약 이력을 확인합니다.</p></div></div>{integration.video ? <div className="list"><div className="list-item"><span className="stat-icon"><Video size={18} /></span><div className="list-item-body"><strong>현재 진행 중인 회의가 없습니다</strong><span>회의가 시작되면 참가자와 방장 정보가 표시됩니다.</span></div></div></div> : <div className="empty-state"><VideoOff size={34} /><h3>영상 제공자 미연결</h3><p>RealtimeKit 서버 자격 증명을 설정하면 회의 운영 화면이 활성화됩니다.</p></div>}</>}
           {tab === "brand" && <div className="settings-form"><div className="setting-section"><h3>브랜드 설정</h3><p>서비스 전체에 표시되는 이름과 메시지를 관리합니다.</p><div className="field"><label>서비스명</label><input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} /></div><div className="form-row"><div className="field"><label>대표 컬러</label><input type="color" defaultValue="#21151B" /></div><div className="field"><label>포인트 컬러</label><input type="color" defaultValue="#D71962" /></div></div><div className="field"><label>메인 문구</label><textarea defaultValue="대화와 회의를 하나의 안전한 공간에서." /></div><button className="primary-btn" onClick={() => saveBrand(name)}>브랜드 적용</button></div><div className="setting-section"><h3>운영 정책</h3><p>서비스 공개 문서는 배포 전 법률 전문가 검토가 필요합니다.</p><button className="secondary-btn" onClick={() => showToast("개인정보처리방침 초안은 docs 폴더에 포함되어 있습니다.")}>정책 문서 확인</button></div></div>}
           {tab === "security" && <><div className="panel-header"><div><h2>보안 로그</h2><p>관리자 활동과 인증 경고를 확인합니다.</p></div></div><div className="list">{[["관리자 로그인", "현재 기기 · 방금"], ["서비스 설정 조회", "관리자 · 3분 전"], ["초대코드 생성 시도", "데모 모드 · 5분 전"]].map(([title, body]) => <div className="list-item" key={title}><span className="stat-icon"><ShieldCheck size={18} /></span><div className="list-item-body"><strong>{title}</strong><span>{body}</span></div></div>)}</div></>}
