@@ -10,7 +10,7 @@ import {
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type View = "dashboard" | "chat" | "meetings" | "contacts" | "notifications" | "files" | "settings" | "admin";
-type LoginMode = "home" | "master" | "invite";
+type LoginMode = "home" | "master";
 type Room = { id: string; name: string; preview: string; time: string; unread: number; members: number; type: "direct" | "group" | "notice" };
 type ChatMessage = { id: string; author: string; text: string; time: string; mine?: boolean };
 type IntegrationState = { cloudflare: boolean; auth: boolean; chat: boolean; video: boolean; storage: boolean; webPush: boolean };
@@ -345,6 +345,38 @@ export function PrivateTalkApp() {
 
   if (!ready) return <div className="loading-screen"><div className="loading-mark"><div className="loading-dot" />PRIVATE TALK</div></div>;
   if (!signedIn) return <LoginScreen mode={loginMode} setMode={setLoginMode} onMasterAccess={handleMasterAccess} onInviteJoin={handleInviteJoin} configured={integration.auth} brand={brandName} toast={toast} />;
+  if (!demoMode && currentUser) {
+    const isAdmin = currentUser.role === "admin" || currentUser.role === "super_admin";
+    if (isAdmin && view === "admin") {
+      return <EasyAdminConsole
+        rooms={rooms}
+        onRoomCreated={(room) => {
+          setRooms((current) => [...current, room]);
+          setActiveRoom(room.id);
+        }}
+        openRoom={(roomId) => {
+          setActiveRoom(roomId);
+          setView("chat");
+        }}
+        logout={logout}
+        toast={toast}
+        showToast={showToast}
+      />;
+    }
+    return <EasyChatRoom
+      room={currentRoom}
+      messages={currentMessages}
+      draft={draft}
+      setDraft={setDraft}
+      submit={submitMessage}
+      onKey={onDraftKey}
+      displayName={currentUser.display_name}
+      isAdmin={isAdmin}
+      backToAdmin={() => setView("admin")}
+      logout={logout}
+      toast={toast}
+    />;
+  }
 
   return (
     <div className="app-shell">
@@ -410,6 +442,176 @@ export function PrivateTalkApp() {
   );
 }
 
+function EasyAdminConsole({ rooms, onRoomCreated, openRoom, logout, toast, showToast }: {
+  rooms: Room[];
+  onRoomCreated: (room: Room) => void;
+  openRoom: (roomId: string) => void;
+  logout: () => void;
+  toast: string;
+  showToast: (text: string) => void;
+}) {
+  const [roomName, setRoomName] = useState("");
+  const [selectedRoomId, setSelectedRoomId] = useState("");
+  const [invitation, setInvitation] = useState<{ code: string; roomName: string } | null>(null);
+
+  async function createRoom(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = roomName.trim();
+    if (!name) return;
+    const response = await fetch("/api/cloudflare/admin/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description: "초대번호로 들어오는 대화방" }),
+    });
+    const data = await response.json() as { room?: Room; error?: string };
+    if (!response.ok || !data.room) {
+      showToast(data.error ?? "방을 만들지 못했습니다. 다시 눌러 주세요.");
+      return;
+    }
+    const room = { ...data.room, preview: "대화를 시작해 보세요.", time: "", unread: 0 };
+    onRoomCreated(room);
+    setSelectedRoomId(room.id);
+    setRoomName("");
+    setInvitation(null);
+    showToast("방을 만들었습니다. 이제 ②번을 누르세요.");
+  }
+
+  async function makeInvitation(roomOverride?: string) {
+    const roomId = roomOverride || selectedRoomId || rooms[0]?.id || "";
+    if (!roomId) {
+      showToast("먼저 ①번에서 방을 만들어 주세요.");
+      return;
+    }
+    const response = await fetch("/api/cloudflare/admin/invitations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "쉬운 입장 번호", roomId, maxUses: 1, expiresInDays: 7 }),
+    });
+    const data = await response.json() as { invitation?: { code: string; roomName: string }; error?: string };
+    if (!response.ok || !data.invitation) {
+      showToast(data.error ?? "초대번호를 만들지 못했습니다. 다시 눌러 주세요.");
+      return;
+    }
+    setSelectedRoomId(roomId);
+    setInvitation(data.invitation);
+    await navigator.clipboard?.writeText(data.invitation.code);
+    showToast("초대번호를 만들고 복사했습니다.");
+  }
+
+  async function copyInvitation() {
+    if (!invitation) return;
+    await navigator.clipboard?.writeText(invitation.code);
+    showToast("번호를 복사했습니다. 카톡이나 문자로 보내세요.");
+  }
+
+  return (
+    <div className="easy-page">
+      <header className="easy-topbar">
+        <Brand name="THEHAM PRIVATE TALK" />
+        <button className="easy-exit" onClick={logout}><LogOut size={18} />나가기</button>
+      </header>
+      <main className="easy-admin-main">
+        <div className="easy-title">
+          <span className="easy-role"><ShieldCheck size={18} />관리자 화면</span>
+          <h1>방을 만들고<br />번호를 보내세요</h1>
+          <p>아래 숫자 순서대로 누르면 됩니다.</p>
+        </div>
+
+        <section className="easy-action-card">
+          <div className="easy-number">1</div>
+          <div className="easy-action-body">
+            <h2>방 만들기</h2>
+            <p>사람들이 함께 이야기할 방 이름을 쓰세요.</p>
+            <form className="easy-room-form" onSubmit={createRoom}>
+              <label htmlFor="easy-room-name">방 이름</label>
+              <input id="easy-room-name" value={roomName} onChange={(event) => setRoomName(event.target.value)} placeholder="예: 우리 모임방" minLength={2} maxLength={80} required />
+              <button className="primary-btn easy-main-button" type="submit"><Plus size={21} />방 만들기</button>
+            </form>
+          </div>
+        </section>
+
+        <section className="easy-action-card">
+          <div className="easy-number">2</div>
+          <div className="easy-action-body">
+            <h2>초대번호 만들기</h2>
+            <p>사람을 들어오게 할 방을 고르세요.</p>
+            {rooms.length ? <>
+              <label htmlFor="easy-room-select">들어갈 방</label>
+              <select id="easy-room-select" value={selectedRoomId || rooms[0]?.id || ""} onChange={(event) => setSelectedRoomId(event.target.value)}>
+                {rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
+              </select>
+              <button className="primary-btn easy-main-button" onClick={() => void makeInvitation()}><Link2 size={21} />초대번호 만들기</button>
+            </> : <div className="easy-empty">아직 방이 없습니다.<br />위 ①번에서 먼저 방을 만드세요.</div>}
+          </div>
+        </section>
+
+        <section className={`easy-action-card ${invitation ? "done" : ""}`}>
+          <div className="easy-number">3</div>
+          <div className="easy-action-body">
+            <h2>번호 보내기</h2>
+            {invitation ? <>
+              <p><strong>{invitation.roomName}</strong>에 들어오는 번호입니다.</p>
+              <div className="easy-invite-code">{invitation.code}</div>
+              <button className="success-btn easy-main-button" onClick={() => void copyInvitation()}><Check size={21} />번호 복사하기</button>
+              <div className="easy-help">복사한 번호를 카카오톡이나 문자로 보내세요.<br />이 번호는 한 사람이 한 번 사용할 수 있어요.</div>
+            </> : <div className="easy-empty">②번에서 초대번호를 만들면<br />여기에 크게 나옵니다.</div>}
+          </div>
+        </section>
+
+        <section className="easy-room-list">
+          <h2>내가 만든 방</h2>
+          {rooms.map((room) => <div className="easy-room-row" key={room.id}><div><strong>{room.name}</strong><span>{room.members}명 들어옴</span></div><button onClick={() => openRoom(room.id)}><MessageCircle size={18} />방 보기</button><button onClick={() => void makeInvitation(room.id)}><Link2 size={18} />번호 만들기</button></div>)}
+        </section>
+      </main>
+      {toast && <div className="toast" role="status">{toast}</div>}
+    </div>
+  );
+}
+
+function EasyChatRoom({ room, messages, draft, setDraft, submit, onKey, displayName, isAdmin, backToAdmin, logout, toast }: {
+  room: Room | undefined;
+  messages: ChatMessage[];
+  draft: string;
+  setDraft: (text: string) => void;
+  submit: () => Promise<void>;
+  onKey: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  displayName: string;
+  isAdmin: boolean;
+  backToAdmin: () => void;
+  logout: () => void;
+  toast: string;
+}) {
+  return (
+    <div className="easy-chat-page">
+      <header className="easy-chat-head">
+        <div>
+          <span className="easy-connected">● 들어왔어요</span>
+          <h1>{room?.name ?? "방을 여는 중입니다"}</h1>
+        </div>
+        <div className="easy-head-actions">
+          {isAdmin && <button onClick={backToAdmin}><ChevronLeft size={18} />관리 화면</button>}
+          <button onClick={logout}><LogOut size={18} />나가기</button>
+        </div>
+      </header>
+      <main className="easy-chat-main">
+        <div className="easy-chat-guide"><Info size={20} /><span>아래 빈칸에 글을 쓰고<br /><strong>보내기</strong>를 누르세요.</span></div>
+        <div className="easy-messages" aria-live="polite">
+          {!room ? <div className="easy-empty">잠시만 기다려 주세요.<br />방을 열고 있습니다.</div> : messages.length === 0 ? <div className="easy-empty"><MessageCircle size={34} /><strong>아직 글이 없습니다</strong><br />먼저 인사해 보세요.</div> : messages.map((message) => <div className={`easy-message ${message.mine ? "mine" : ""}`} key={message.id}><b>{message.mine ? "나" : message.author}</b><p>{message.text}</p><time>{message.time}</time></div>)}
+        </div>
+      </main>
+      <footer className="easy-composer">
+        <label htmlFor="easy-message-box">글 쓰는 곳</label>
+        <div>
+          <textarea id="easy-message-box" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKey} placeholder="여기에 글을 쓰세요" rows={2} disabled={!room} />
+          <button onClick={() => void submit()} disabled={!room || !draft.trim()}><Send size={23} />보내기</button>
+        </div>
+        <small>내 이름: {displayName}</small>
+      </footer>
+      {toast && <div className="toast" role="status">{toast}</div>}
+    </div>
+  );
+}
+
 function LoginScreen({ mode, setMode, onMasterAccess, onInviteJoin, configured, brand, toast }: {
   mode: LoginMode;
   setMode: (mode: LoginMode) => void;
@@ -434,39 +636,37 @@ function LoginScreen({ mode, setMode, onMasterAccess, onInviteJoin, configured, 
         <div className="login-card">
           {mode === "home" && (
             <>
-              <p className="eyebrow">Choose entrance</p>
-              <h2>어떻게 입장하시겠어요?</h2>
-              <p>관리자는 방과 초대번호를 관리하고, 참여자는 받은 번호만 입력하면 됩니다.</p>
-              <button className="primary-btn full entry-choice" onClick={() => setMode("invite")}><Link2 size={18} />초대번호로 바로 입장</button>
-              <button className="secondary-btn full entry-choice" onClick={() => setMode("master")}><ShieldCheck size={18} />마스터 관리자</button>
-              {configured
-                ? <div className="setup-note"><strong>Cloudflare 운영 연결 완료</strong><br />초대번호와 방 권한은 서버에서 검증됩니다.</div>
-                : <div className="setup-note"><strong>서버 점검 중</strong><br />Cloudflare 인증 서버 연결을 확인하고 있습니다. 잠시 후 다시 시도해 주세요.</div>}
-            </>
-          )}
-          {mode === "invite" && (
-            <>
-              <button className="text-btn" onClick={() => setMode("home")}><ChevronLeft size={16} />처음으로</button>
-              <p className="eyebrow" style={{ marginTop: 20 }}>Invitation entrance</p><h2>초대번호로 입장</h2><p>관리자에게 받은 번호를 입력하면 연결된 방으로 바로 이동합니다.</p>
-              <form onSubmit={(event) => {
+              <p className="easy-label">초대받은 분</p>
+              <h2>초대번호를 넣으세요</h2>
+              <p className="easy-lead">받은 번호를 아래 칸에 쓰고<br /><strong>방에 들어가기</strong>를 누르세요.</p>
+              <form className="easy-join-form" onSubmit={(event) => {
                 event.preventDefault();
                 void onInviteJoin(String(new FormData(event.currentTarget).get("invite") ?? ""));
               }}>
-                <div className="field"><label htmlFor="invite">초대번호</label><input id="invite" name="invite" autoComplete="one-time-code" placeholder="XXXX-XXXX-XXXX" required /></div>
-                <button className="primary-btn full" type="submit">바로 입장하기</button>
+                <div className="field"><label htmlFor="invite-home">① 초대번호</label><input id="invite-home" name="invite" className="invite-number-input" autoComplete="one-time-code" placeholder="예: ABCD-1234-EFGH" required /></div>
+                <button className="primary-btn full easy-main-button" type="submit">② 방에 들어가기 <ChevronLeft className="arrow-forward" size={22} /></button>
               </form>
+              <div className="easy-steps" aria-label="사용 순서">
+                <div><b>1</b><span>번호 쓰기</span></div><i />
+                <div><b>2</b><span>버튼 누르기</span></div><i />
+                <div><b>3</b><span>글 쓰기</span></div>
+              </div>
+              {configured
+                ? <div className="easy-ready">● 지금 바로 사용할 수 있어요</div>
+                : <div className="setup-note"><strong>잠시 기다려 주세요</strong><br />서버를 확인하고 있습니다.</div>}
+              <button className="master-entry-link" onClick={() => setMode("master")}><ShieldCheck size={16} />방을 만드는 관리자이신가요?</button>
             </>
           )}
           {mode === "master" && (
             <>
               <button className="text-btn" onClick={() => setMode("home")}><ChevronLeft size={16} />처음으로</button>
-              <p className="eyebrow" style={{ marginTop: 20 }}>Master console</p><h2>마스터 관리자</h2><p>관리자 비밀번호를 입력하면 초대번호와 채팅방을 관리할 수 있습니다.</p>
+              <p className="easy-label" style={{ marginTop: 20 }}>관리자 전용</p><h2>관리자 비밀번호</h2><p className="easy-lead">비밀번호 4자리를 넣고<br /><strong>관리자 화면 열기</strong>를 누르세요.</p>
               <form onSubmit={(event) => {
                 event.preventDefault();
                 void onMasterAccess(String(new FormData(event.currentTarget).get("pin") ?? ""));
               }}>
                 <div className="field"><label htmlFor="master-pin">관리자 비밀번호</label><input id="master-pin" name="pin" type="password" inputMode="numeric" autoComplete="current-password" minLength={4} maxLength={12} required /></div>
-                <button className="primary-btn full" type="submit"><ShieldCheck size={17} />관리자 입장</button>
+                <button className="primary-btn full easy-main-button" type="submit"><ShieldCheck size={19} />관리자 화면 열기</button>
               </form>
             </>
           )}

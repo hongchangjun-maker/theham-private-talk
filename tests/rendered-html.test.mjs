@@ -10,7 +10,11 @@ test("source contains master and invitation-only entrances", async () => {
   assert.match(component, /THEHAM PRIVATE TALK/);
   assert.match(component, /우리만의 안전한/);
   assert.match(component, /마스터 관리자/);
-  assert.match(component, /초대번호로 바로 입장/);
+  assert.match(component, /① 초대번호/);
+  assert.match(component, /② 방에 들어가기/);
+  assert.match(component, /방을 만들고<br \/>번호를 보내세요/);
+  assert.match(component, /여기에 글을 쓰세요/);
+  assert.match(component, /번호 복사하기/);
   assert.doesNotMatch(component, /초대코드로 가입|가입 승인 요청/);
   assert.match(layout, /lang="ko"/);
   assert.doesNotMatch(component, /codex-preview|Starter Project|Your site is taking shape/);
@@ -38,7 +42,7 @@ test("PWA manifest and service worker are production branded", async () => {
   const parsed = JSON.parse(manifest);
   assert.equal(parsed.name, "THEHAM PRIVATE TALK");
   assert.equal(parsed.display, "standalone");
-  assert.match(sw, /private-talk-shell-v4-invite-entry/);
+  assert.match(sw, /private-talk-shell-v5-easy-ui/);
   assert.match(sw, /pathname\.startsWith\("\/api\/"\)/);
 });
 

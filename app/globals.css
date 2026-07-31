@@ -93,6 +93,65 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .inline-room-form { display: flex; align-items: end; gap: 12px; padding: 16px; margin-bottom: 18px; border-radius: 16px; background: var(--soft); }
 .inline-room-form .field { flex: 1; margin: 0; }
 .demo-banner code { padding: 4px 8px; border-radius: 8px; background: white; font-weight: 750; letter-spacing: .08em; }
+.easy-label { display: inline-flex; margin: 0 0 10px !important; padding: 6px 12px; border-radius: 999px; background: var(--blush); color: var(--accent) !important; font-size: 15px; font-weight: 800; }
+.easy-lead { font-size: 17px; line-height: 1.7 !important; color: #51454b !important; }
+.easy-join-form label, .easy-room-form label, .easy-action-body > label, .easy-composer > label { display: block; margin-bottom: 8px; color: #2d2026; font-size: 17px; font-weight: 800; }
+.invite-number-input { min-height: 60px; text-align: center; font-size: 21px !important; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.easy-main-button { min-height: 58px; justify-content: center; gap: 9px; margin-top: 12px; font-size: 18px; font-weight: 800; }
+.arrow-forward { transform: rotate(180deg); }
+.easy-steps { display: grid; grid-template-columns: 1fr 20px 1fr 20px 1fr; align-items: center; margin: 22px 0 16px; }
+.easy-steps div { display: grid; place-items: center; gap: 7px; text-align: center; color: #594a51; font-size: 12px; font-weight: 700; }
+.easy-steps b { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 50%; background: #2d2026; color: white; font-size: 16px; }
+.easy-steps i { height: 2px; background: #dfd4d9; }
+.easy-ready { margin: 12px 0; padding: 12px; border-radius: 12px; background: #eaf8ef; color: #17633a; text-align: center; font-weight: 800; }
+.master-entry-link { display: flex; width: 100%; align-items: center; justify-content: center; gap: 7px; margin-top: 20px; padding: 14px; border: 0; background: transparent; color: #5e5057; text-decoration: underline; font-size: 14px; font-weight: 700; cursor: pointer; }
+
+.easy-page, .easy-chat-page { min-height: 100dvh; background: #f7f3f5; color: #21151b; }
+.easy-topbar, .easy-chat-head { position: sticky; z-index: 10; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px clamp(18px, 4vw, 42px); border-bottom: 1px solid #e6dce1; background: #fff; }
+.easy-exit, .easy-head-actions button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; border: 1px solid #d8cbd1; border-radius: 12px; background: #fff; color: #3e3037; font-size: 15px; font-weight: 800; cursor: pointer; }
+.easy-admin-main { width: min(100% - 32px, 760px); margin: 0 auto; padding: 38px 0 70px; }
+.easy-title { margin-bottom: 25px; text-align: center; }
+.easy-title h1 { margin: 12px 0 8px; font-size: clamp(32px, 6vw, 48px); line-height: 1.16; letter-spacing: -.045em; }
+.easy-title p { margin: 0; color: #675860; font-size: 18px; }
+.easy-role { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: #21151b; color: #fff; font-weight: 800; }
+.easy-action-card { display: grid; grid-template-columns: 54px 1fr; gap: 18px; margin-top: 18px; padding: 24px; border: 2px solid #e3d8dd; border-radius: 22px; background: white; box-shadow: 0 8px 24px rgba(48,28,38,.05); }
+.easy-action-card.done { border-color: #8bc9a5; background: #fbfffc; }
+.easy-number { display: grid; width: 50px; height: 50px; place-items: center; border-radius: 50%; background: #d71962; color: white; font-size: 25px; font-weight: 900; }
+.easy-action-body h2 { margin: 3px 0 7px; font-size: 25px; }
+.easy-action-body > p { margin: 0 0 17px; color: #675860; font-size: 16px; line-height: 1.6; }
+.easy-room-form input, .easy-action-body select { width: 100%; min-height: 56px; border: 2px solid #cfc0c7; border-radius: 13px; padding: 0 15px; background: white; color: #21151b; font-size: 18px; }
+.easy-action-body select { margin-bottom: 2px; }
+.success-btn { display: inline-flex; border: 0; border-radius: 13px; padding: 0 20px; background: #167243; color: white; cursor: pointer; }
+.easy-invite-code { margin: 10px 0 4px; padding: 18px 12px; border: 3px dashed #d71962; border-radius: 15px; background: #fff3f7; color: #941042; text-align: center; font-size: clamp(24px, 6vw, 38px); font-weight: 900; letter-spacing: .09em; word-break: break-all; }
+.easy-help { margin-top: 14px; padding: 14px; border-radius: 12px; background: #eef7ff; color: #234e73; font-size: 15px; font-weight: 700; line-height: 1.6; }
+.easy-empty { padding: 22px; border-radius: 14px; background: #f4f0f2; color: #685961; text-align: center; font-size: 16px; line-height: 1.7; }
+.easy-room-list { margin-top: 34px; }
+.easy-room-list h2 { margin-bottom: 12px; font-size: 23px; }
+.easy-room-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; margin-top: 8px; padding: 14px; border: 1px solid #e1d6db; border-radius: 15px; background: white; }
+.easy-room-row div { display: grid; gap: 4px; }
+.easy-room-row strong { font-size: 17px; }
+.easy-room-row span { color: #72636a; font-size: 13px; }
+.easy-room-row button { display: inline-flex; min-height: 42px; align-items: center; gap: 5px; border: 1px solid #d7c8cf; border-radius: 11px; padding: 0 11px; background: #fff; color: #3b2c33; font-weight: 800; cursor: pointer; }
+
+.easy-chat-page { display: grid; grid-template-rows: auto 1fr auto; height: 100dvh; overflow: hidden; background: #f8f5f6; }
+.easy-chat-head { position: relative; }
+.easy-chat-head h1 { margin: 4px 0 0; font-size: clamp(22px, 4vw, 30px); }
+.easy-connected { color: #167243; font-size: 14px; font-weight: 900; }
+.easy-head-actions { display: flex; gap: 7px; }
+.easy-chat-main { width: min(100%, 820px); margin: 0 auto; padding: 18px 18px 0; overflow-y: auto; }
+.easy-chat-guide { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 13px 16px; border-radius: 14px; background: #fff3d7; color: #634a0b; font-size: 15px; line-height: 1.45; }
+.easy-messages { display: grid; gap: 12px; padding-bottom: 25px; }
+.easy-message { width: fit-content; max-width: min(85%, 580px); padding: 13px 15px; border: 1px solid #e1d5da; border-radius: 6px 18px 18px 18px; background: white; box-shadow: 0 4px 12px rgba(50,29,39,.04); }
+.easy-message.mine { justify-self: end; border-color: #d71962; border-radius: 18px 6px 18px 18px; background: #d71962; color: white; }
+.easy-message b { font-size: 14px; }
+.easy-message p { margin: 5px 0 4px; font-size: 18px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.easy-message time { opacity: .7; font-size: 11px; }
+.easy-composer { padding: 13px max(18px, calc((100% - 820px) / 2 + 18px)) 16px; border-top: 2px solid #ddcfd5; background: white; }
+.easy-composer > div { display: grid; grid-template-columns: 1fr 120px; gap: 10px; }
+.easy-composer textarea { width: 100%; min-height: 64px; resize: none; border: 2px solid #a9959f; border-radius: 14px; padding: 12px 14px; color: #21151b; font: inherit; font-size: 18px; }
+.easy-composer button { display: flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 14px; background: #d71962; color: white; font-size: 18px; font-weight: 900; cursor: pointer; }
+.easy-composer button:disabled { background: #c8bbc1; cursor: not-allowed; }
+.easy-composer small { display: block; margin-top: 6px; color: #74656d; font-size: 12px; }
 .setup-note { margin-top: 24px; padding: 14px; border-radius: 14px; background: #fff8e9; border: 1px solid #f1d59d; color: #795719; font-size: 12px; line-height: 1.6; }
 .demo-entry { margin-top: 14px; }
 
@@ -298,8 +357,8 @@ button.list-item:hover { background: #faf7f9; }
 }
 @media (max-width: 900px) {
   .login-shell { grid-template-columns: 1fr; }
-  .login-visual { min-height: 360px; }
-  .login-panel { padding: 20px; }
+  .login-visual { display: none; }
+  .login-panel { min-height: 100dvh; padding: 20px; }
   .app-shell { display: block; }
   .sidebar { display: none; }
   .topbar { height: 64px; padding: 0 16px; }
@@ -328,12 +387,23 @@ button.list-item:hover { background: #faf7f9; }
   .meeting-card > .primary-btn { grid-column: 1 / -1; }
 }
 @media (max-width: 620px) {
-  .login-visual { min-height: 300px; }
   .login-copy h1 { font-size: 36px; }
   .security-strip { display: none; }
   .login-card { border-radius: 22px; padding: 25px 20px; }
   .admin-invite-actions, .inline-room-form { align-items: stretch; flex-direction: column; }
   .admin-invite-actions select { width: 100%; }
+  .easy-action-card { grid-template-columns: 42px 1fr; gap: 12px; padding: 18px 15px; }
+  .easy-number { width: 40px; height: 40px; font-size: 21px; }
+  .easy-room-row { grid-template-columns: 1fr 1fr; }
+  .easy-room-row div { grid-column: 1 / -1; }
+  .easy-room-row button { justify-content: center; }
+  .easy-chat-head { align-items: flex-start; padding: 12px 14px; }
+  .easy-head-actions { flex-direction: column; }
+  .easy-head-actions button { min-height: 38px; padding: 0 9px; font-size: 13px; }
+  .easy-chat-main { padding: 12px 12px 0; }
+  .easy-composer { padding: 10px 12px 12px; }
+  .easy-composer > div { grid-template-columns: 1fr 94px; gap: 7px; }
+  .easy-composer button { font-size: 16px; }
   .form-row { grid-template-columns: 1fr; gap: 0; }
   .page-title span { display: none; }
   .stats-grid, .cards-grid, .contact-grid { grid-template-columns: 1fr; }
