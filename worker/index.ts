@@ -19,6 +19,40 @@ interface ExecutionContext {
   passThroughOnException(): void;
 }
 
+const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "Content-Security-Policy": [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+    "font-src 'self' data:",
+    "frame-ancestors 'none'",
+    "img-src 'self' data: blob:",
+    "media-src 'self' blob:",
+    "object-src 'none'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "worker-src 'self' blob:",
+  ].join("; "),
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": "camera=(self), microphone=(self), display-capture=(self), geolocation=()",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+};
+
+function withSecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 // Image security config. SVG sources with .svg extension auto-skip the
 // optimization endpoint on the client side (served directly, no proxy).
 // To route SVGs through the optimizer (with security headers), set
@@ -40,7 +74,7 @@ const worker = {
       }, allowedWidths);
     }
 
-    return handler.fetch(request, env, ctx);
+    return withSecurityHeaders(await handler.fetch(request, env, ctx));
   },
 };
 

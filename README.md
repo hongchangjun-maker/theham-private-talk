@@ -70,4 +70,17 @@ Supabase SQL Editor 또는 CLI로 아래 순서를 지켜 적용합니다.
 
 Sites 배포에서는 `.openai/hosting.json`을 사용합니다. GitHub/Cloudflare 직접 배포 시에도 서버 전용 비밀은 Cloudflare 대시보드의 런타임 시크릿으로 설정하고 저장소에는 올리지 않습니다.
 
+Cloudflare Workers 직접 배포:
+
+```powershell
+npm run deploy:cloudflare:dry
+npm run deploy:cloudflare
+```
+
+GitHub Actions 재배포:
+
+1. 저장소 Actions 변수 `CLOUDFLARE_ACCOUNT_ID`를 설정합니다.
+2. Workers 배포 권한이 있는 `CLOUDFLARE_API_TOKEN`을 Actions secret으로 설정합니다.
+3. `Deploy to Cloudflare Workers` 워크플로를 수동 실행합니다.
+
 이 소스는 상업적 제품 개발에 사용할 수 있지만 Supabase, Cloudflare RealtimeKit, 폰트·이미지, 기타 의존성의 각 라이선스와 요금 약관을 별도로 확인해야 합니다. 법률 문서는 예시이며 배포 전 전문가 검토가 필요합니다.
