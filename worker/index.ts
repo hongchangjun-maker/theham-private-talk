@@ -44,6 +44,7 @@ const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const PASSWORD_ITERATIONS = 100_000;
 const MAX_JSON_BYTES = 24_000;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const PUBLIC_WORKER_ORIGIN = "https://theham-private-talk.hhongcjun.workers.dev";
 
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "Content-Security-Policy": [
@@ -897,10 +898,24 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
 const worker = {
   async fetch(request: Request, env: AppEnv, ctx: ExecutionContext): Promise<Response> {
     try {
+      const incomingUrl = new URL(request.url);
+      if (incomingUrl.hostname.endsWith(".chatgpt.site") && incomingUrl.pathname.startsWith("/api/")) {
+        const targetUrl = new URL(`${incomingUrl.pathname}${incomingUrl.search}`, PUBLIC_WORKER_ORIGIN);
+        const headers = new Headers(request.headers);
+        headers.set("Origin", PUBLIC_WORKER_ORIGIN);
+        const proxyRequest = new Request(targetUrl, {
+          method: request.method,
+          headers,
+          body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+          redirect: "manual",
+        });
+        return withSecurityHeaders(await fetch(proxyRequest));
+      }
+
       const apiResponse = await api(request, env, ctx);
       if (apiResponse) return withSecurityHeaders(apiResponse);
 
-      const url = new URL(request.url);
+      const url = incomingUrl;
       if (url.pathname === "/_vinext/image") {
         const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
         const response = await handleImageOptimization(request, {

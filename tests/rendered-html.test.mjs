@@ -22,6 +22,8 @@ test("Worker owns Cloudflare master, guest join, chat, and storage routes", asyn
   assert.match(source, /\/api\/cloudflare\/master-login/);
   assert.match(source, /\/api\/cloudflare\/join/);
   assert.match(source, /env\.MASTER_PIN/);
+  assert.match(source, /hostname\.endsWith\("\.chatgpt\.site"\)/);
+  assert.match(source, /PUBLIC_WORKER_ORIGIN/);
   assert.match(source, /\/api\/cloudflare\/rooms/);
   assert.match(source, /\/api\/cloudflare\/files/);
   assert.match(source, /class ChatRoom extends DurableObject/);
