@@ -1,5 +1,5 @@
-import { PrivateTalkApp } from "@/components/PrivateTalkCloudflareAppV3";
+import { SecretRouletteApp } from "@/components/SecretRouletteApp";
 
 export default function Home() {
-  return <PrivateTalkApp />;
+  return <SecretRouletteApp />;
 }

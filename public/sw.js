@@ -1,4 +1,4 @@
-const CACHE = "private-talk-shell-v5-easy-ui";
+const CACHE = "secret-friend-shell-v6-random-chat";
 const SHELL = ["/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {

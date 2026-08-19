@@ -2,59 +2,56 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("source contains master and invitation-only entrances", async () => {
+test("source contains beginner-first signup, roulette, AI, and admin entrances", async () => {
   const [component, layout] = await Promise.all([
-    readFile(new URL("../components/PrivateTalkCloudflareAppV3.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/SecretRouletteApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(component, /THEHAM PRIVATE TALK/);
-  assert.match(component, /우리만의 안전한/);
+  assert.match(component, /비밀친구/);
+  assert.match(component, /전화번호 끝 4자리/);
   assert.match(component, /마스터 관리자/);
-  assert.match(component, /① 초대번호/);
-  assert.match(component, /② 방에 들어가기/);
-  assert.match(component, /방을 만들고<br \/>번호를 보내세요/);
-  assert.match(component, /여기에 글을 쓰세요/);
-  assert.match(component, /번호 복사하기/);
-  assert.doesNotMatch(component, /초대코드로 가입|가입 승인 요청/);
+  assert.match(component, /5초 룰렛 시작하기/);
+  assert.match(component, /루미 AI와 대화/);
+  assert.match(component, /신고하기/);
+  assert.match(component, /차단하고 끝내기/);
   assert.match(layout, /lang="ko"/);
   assert.doesNotMatch(component, /codex-preview|Starter Project|Your site is taking shape/);
 });
 
-test("Worker owns Cloudflare master, guest join, chat, and storage routes", async () => {
+test("Worker owns signup, random matching, realtime chat, AI, and moderation routes", async () => {
   const source = await readFile(new URL("../worker/index.ts", import.meta.url), "utf8");
   assert.match(source, /backend: "cloudflare"/);
+  assert.match(source, /\/api\/random\/signup/);
+  assert.match(source, /\/api\/random\/matches/);
+  assert.match(source, /env\.AI\.run/);
   assert.match(source, /\/api\/cloudflare\/master-login/);
-  assert.match(source, /\/api\/cloudflare\/join/);
   assert.match(source, /env\.MASTER_PIN/);
   assert.match(source, /hostname\.endsWith\("\.chatgpt\.site"\)/);
-  assert.match(source, /PUBLIC_WORKER_ORIGIN/);
-  assert.match(source, /\/api\/cloudflare\/rooms/);
-  assert.match(source, /\/api\/cloudflare\/files/);
   assert.match(source, /class ChatRoom extends DurableObject/);
   assert.match(source, /HttpOnly; Secure; SameSite=Lax/);
 });
 
-test("PWA manifest and service worker are production branded", async () => {
+test("PWA manifest and service worker use the new product branding", async () => {
   const [manifest, sw] = await Promise.all([
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
   ]);
   const parsed = JSON.parse(manifest);
-  assert.equal(parsed.name, "THEHAM PRIVATE TALK");
+  assert.equal(parsed.name, "THEHAM 비밀친구");
   assert.equal(parsed.display, "standalone");
-  assert.match(sw, /private-talk-shell-v5-easy-ui/);
+  assert.match(sw, /secret-friend-shell-v6-random-chat/);
   assert.match(sw, /pathname\.startsWith\("\/api\/"\)/);
 });
 
-test("Cloudflare schema keeps only hashes for sessions and invitations", async () => {
-  const [schema, invitationMigration] = await Promise.all([
+test("Cloudflare schema hashes access data and provides moderation tables", async () => {
+  const [schema, randomChatMigration] = await Promise.all([
     readFile(new URL("../migrations/0001_cloudflare_core.sql", import.meta.url), "utf8"),
-    readFile(new URL("../migrations/0002_room_invitation.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0003_secret_roulette.sql", import.meta.url), "utf8"),
   ]);
   assert.match(schema, /token_hash TEXT PRIMARY KEY/i);
-  assert.match(schema, /code_hash TEXT NOT NULL UNIQUE/i);
   assert.doesNotMatch(schema, /\btoken TEXT\b/i);
-  assert.match(schema, /CREATE TABLE IF NOT EXISTS room_members/i);
-  assert.match(schema, /CREATE TABLE IF NOT EXISTS audit_logs/i);
-  assert.match(invitationMigration, /ADD COLUMN room_id/i);
+  assert.match(randomChatMigration, /phone_last4_hash TEXT NOT NULL/i);
+  assert.doesNotMatch(randomChatMigration, /phone_last4 TEXT/i);
+  assert.match(randomChatMigration, /CREATE TABLE IF NOT EXISTS random_matches/i);
+  assert.match(randomChatMigration, /CREATE TABLE IF NOT EXISTS chat_reports/i);
 });
