@@ -431,6 +431,7 @@ function publicMatch(row: RandomMatch, viewerId?: string): Record<string, unknow
     introduction: row.requester_introduction ?? "",
     photoUrl: row.requester_photo_key ? `/api/random/profile/photo/${row.requester_id}` : null,
   } : {
+    userId: row.target_user_id ?? undefined,
     nickname: row.persona_nickname,
     gender: row.persona_gender,
     region: row.persona_region,
