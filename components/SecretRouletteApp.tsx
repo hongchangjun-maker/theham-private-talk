@@ -14,6 +14,7 @@ type Profile = { user_id: string; nickname: string; avatar_id: string; gender: s
 type Persona = { userId?: string; nickname: string; gender: string; region: string; ageBand: string; job: string; introduction?: string; avatarId: string; photoUrl?: string | null; online?: boolean };
 type Match = { id: string; roomId: string; kind: "operator" | "ai"; mode?: "managed" | "direct" | "ai"; status: string; createdAt: string; lastMessageAt?: string | null; persona: Persona; requester?: Persona };
 type Message = { id: string; roomId: string; senderId: string; author: string; text: string; createdAt: string };
+type PublicActivity = { kind: "waiting" | "chatting"; text: string };
 type Screen = "loading" | "welcome" | "signup" | "login" | "home" | "match" | "discover" | "roulette" | "chat" | "admin-login" | "admin";
 
 const avatars = [
@@ -109,6 +110,19 @@ export function SecretRouletteApp() {
     return () => clearInterval(timer);
   }, [screen, loadMatches]);
 
+  useEffect(() => {
+    if (!user || user.role !== "member" || !profile) return;
+    const waiting = screen === "match" || screen === "discover" || screen === "roulette";
+    const updatePresence = () => api("/api/random/presence", {
+      method: "POST",
+      body: JSON.stringify({ state: waiting ? "waiting" : "offline" }),
+    }).catch(() => undefined);
+    updatePresence();
+    if (!waiting) return;
+    const timer = setInterval(updatePresence, 45_000);
+    return () => clearInterval(timer);
+  }, [profile, screen, user]);
+
   async function logout() {
     await api("/api/cloudflare/logout", { method: "POST" }).catch(() => undefined);
     setUser(null); setProfile(null); setMatches([]); setActiveMatch(null); setScreen("welcome");
@@ -183,10 +197,32 @@ export function SecretRouletteApp() {
 function Loading() { return <div className="sr-center"><div className="sr-pulse-logo"><MessageCircleHeart /></div><p>안전하게 연결하고 있어요</p></div>; }
 
 function Welcome({ onSignup, onLogin, onAdmin }: { onSignup: () => void; onLogin: () => void; onAdmin: () => void }) {
+  const [activities, setActivities] = useState<PublicActivity[]>([]);
+  const [activityIndex, setActivityIndex] = useState(0);
+  const [activityLoaded, setActivityLoaded] = useState(false);
+  useEffect(() => {
+    const load = () => api<{ activities: PublicActivity[] }>("/api/random/activity")
+      .then((data) => { setActivities(data.activities); setActivityIndex(0); })
+      .catch(() => setActivities([]))
+      .finally(() => setActivityLoaded(true));
+    load();
+    const refresh = setInterval(load, 20_000);
+    return () => clearInterval(refresh);
+  }, []);
+  useEffect(() => {
+    if (activities.length < 2) return;
+    const rotate = setInterval(() => setActivityIndex((index) => (index + 1) % activities.length), 4_500);
+    return () => clearInterval(rotate);
+  }, [activities]);
+  const activity = activities[activityIndex];
   return (
     <section className="sr-welcome">
       <div className="sr-welcome-art"><div className="sr-orbit"><Avatar id="f3" size="lg" /><Avatar id="m2" size="lg" /></div></div>
       <div className="sr-brand"><span className="sr-brand-mark"><MessageCircleHeart /></span><h1>전국비밀채팅</h1><span>AI 또는 새로운 사람과<br />편안하게 이야기해 보세요.</span></div>
+      <div className={`sr-live-activity ${activity?.kind ?? "empty"}`} aria-live="polite">
+        <span className="sr-live-dot" />
+        <div><small>실시간 대화 현황</small><b>{activity?.text ?? (activityLoaded ? "지금 대화를 기다리는 회원이 없습니다." : "현재 상태를 확인하고 있어요.")}</b></div>
+      </div>
       <div className="sr-welcome-actions">
         <button className="sr-primary sr-big" onClick={onSignup}><Heart /> 처음이에요 · 회원가입</button>
         <button className="sr-secondary sr-big" onClick={onLogin}><CircleUserRound /> 이미 가입했어요</button>

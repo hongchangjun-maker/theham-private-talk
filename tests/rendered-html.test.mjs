@@ -26,6 +26,8 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.doesNotMatch(component, /테스트\s*운영자 대행|모니터링|감시/);
   assert.match(component, /신고하기/);
   assert.match(component, /차단하고 끝내기/);
+  assert.match(component, /실시간 대화 현황/);
+  assert.match(component, /지금 대화를 기다리는 회원이 없습니다/);
   assert.match(layout, /lang="ko"/);
   assert.doesNotMatch(component, /codex-preview|Starter Project|Your site is taking shape/);
 });
@@ -39,6 +41,9 @@ test("Worker owns signup, random matching, realtime chat, AI, and moderation rou
   assert.match(source, /\/api\/random\/profile\/photo/);
   assert.match(source, /\/api\/random\/admin\/test-profiles/);
   assert.match(source, /\/api\/random\/admin\/export/);
+  assert.match(source, /\/api\/random\/activity/);
+  assert.match(source, /\/api\/random\/presence/);
+  assert.match(source, /p\.is_test_profile = 0/);
   assert.match(source, /env\.AI\.run/);
   assert.match(source, /\/api\/cloudflare\/master-login/);
   assert.match(source, /env\.MASTER_PIN/);
@@ -63,11 +68,12 @@ test("PWA manifest and service worker use the new product branding", async () =>
 });
 
 test("Cloudflare schema hashes access data and provides moderation tables", async () => {
-  const [schema, randomChatMigration, phoneIdentityMigration, datingMigration] = await Promise.all([
+  const [schema, randomChatMigration, phoneIdentityMigration, datingMigration, presenceMigration] = await Promise.all([
     readFile(new URL("../migrations/0001_cloudflare_core.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0003_secret_roulette.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0004_phone_identity.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0005_dating_profiles_and_monitoring.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0006_live_chat_presence.sql", import.meta.url), "utf8"),
   ]);
   assert.match(schema, /token_hash TEXT PRIMARY KEY/i);
   assert.doesNotMatch(schema, /\btoken TEXT\b/i);
@@ -81,4 +87,6 @@ test("Cloudflare schema hashes access data and provides moderation tables", asyn
   assert.match(datingMigration, /is_test_profile INTEGER/i);
   assert.match(datingMigration, /target_user_id TEXT/i);
   assert.match(datingMigration, /last_message_at TEXT/i);
+  assert.match(presenceMigration, /CREATE TABLE IF NOT EXISTS chat_presence/i);
+  assert.match(presenceMigration, /CHECK \(state IN \('waiting'\)\)/i);
 });
