@@ -13,7 +13,11 @@ type User = { id: string; display_name: string; role: "member" | "admin" | "supe
 type Profile = { user_id: string; nickname: string; avatar_id: string; gender: string; age_band: string; region: string; job: string; introduction: string; photo_key?: string | null };
 type Persona = { userId?: string; nickname: string; gender: string; region: string; ageBand: string; job: string; introduction?: string; avatarId: string; photoUrl?: string | null; online?: boolean };
 type Match = { id: string; roomId: string; kind: "operator" | "ai"; mode?: "managed" | "direct" | "ai"; status: string; createdAt: string; lastMessageAt?: string | null; persona: Persona; requester?: Persona };
-type Message = { id: string; roomId: string; senderId: string; author: string; text: string; createdAt: string };
+type Message = {
+  id: string; roomId: string; senderId: string; author: string; text: string; createdAt: string;
+  type?: "text" | "image"; attachmentId?: string | null; imageWidth?: number | null;
+  imageHeight?: number | null; byteSize?: number | null;
+};
 type Screen = "loading" | "welcome" | "signup" | "login" | "home" | "match" | "discover" | "roulette" | "chat" | "admin-login" | "admin";
 
 function normalizeMessage(value: unknown): Message | null {
@@ -21,20 +25,59 @@ function normalizeMessage(value: unknown): Message | null {
   const item = value as Partial<Message>;
   const id = String(item.id ?? "").trim();
   const text = String(item.text ?? "").trim();
-  if (!id || !text) return null;
+  const attachmentId = String(item.attachmentId ?? "").trim() || null;
+  const type = item.type === "image" && attachmentId ? "image" : "text";
+  if (!id || (type === "text" && !text)) return null;
   return {
     id,
     roomId: String(item.roomId ?? ""),
     senderId: String(item.senderId ?? ""),
     author: String(item.author ?? "상대"),
-    text,
+    text: text || "사진",
     createdAt: String(item.createdAt ?? new Date().toISOString()),
+    type,
+    attachmentId,
+    imageWidth: Number(item.imageWidth) || null,
+    imageHeight: Number(item.imageHeight) || null,
+    byteSize: Number(item.byteSize) || null,
   };
 }
 
 function messageTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "방금" : date.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
+}
+
+async function optimizeChatImage(file: File): Promise<{ blob: Blob; width: number; height: number }> {
+  if (!file.type.startsWith("image/")) throw new Error("사진 파일만 선택해 주세요.");
+  if (file.size > 25 * 1024 * 1024) throw new Error("원본 사진은 25MB 이하만 선택할 수 있습니다.");
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = objectUrl;
+    await image.decode();
+    if (!image.naturalWidth || !image.naturalHeight) throw new Error("사진을 읽지 못했습니다.");
+    const render = (maxEdge: number, quality: number) => new Promise<{ blob: Blob; width: number; height: number }>((resolve, reject) => {
+      const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) return reject(new Error("사진을 줄이지 못했습니다."));
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+      canvas.toBlob((blob) => blob ? resolve({ blob, width, height }) : reject(new Error("사진을 줄이지 못했습니다.")), "image/jpeg", quality);
+    });
+    let optimized = await render(1280, 0.56);
+    if (optimized.blob.size > 720 * 1024) optimized = await render(960, 0.44);
+    if (optimized.blob.size > 1024 * 1024) throw new Error("사진 용량을 충분히 줄이지 못했습니다. 다른 사진을 선택해 주세요.");
+    return optimized;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 class ScreenErrorBoundary extends Component<{ children: ReactNode; onReset: () => void }, { failed: boolean }> {
@@ -331,7 +374,14 @@ function Roulette() {
 
 function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { match: Match; user: User; profile: Profile | null; admin: boolean; onBack: () => void; onBlocked?: () => void; setNotice: (v: string) => void }) {
   const [messages, setMessages] = useState<Message[]>([]); const [text, setText] = useState(""); const [sending, setSending] = useState(false); const [menu, setMenu] = useState(false); const [showIntro, setShowIntro] = useState(false);
+  const [showAttach, setShowAttach] = useState(false); const [uploading, setUploading] = useState(false); const [dragging, setDragging] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const dragDepth = useRef(0);
+  const managedAdminChat = admin && match.mode === "managed";
+  const managedMemberChat = !admin && match.mode === "managed";
+  const otherPerson = managedAdminChat ? match.requester ?? match.persona : match.persona;
+  const myPerson = managedAdminChat ? match.persona : admin ? match.requester : profile ? { nickname: profile.nickname, gender: profile.gender, ageBand: profile.age_band, region: profile.region, job: profile.job, avatarId: profile.avatar_id, photoUrl: profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null } : null;
+  const canReply = match.status === "live" && (!admin || match.mode === "managed");
   useEffect(() => {
     let socket: WebSocket | null = null; let cancelled = false; let syncing = false;
     const roomPath = encodeURIComponent(match.roomId);
@@ -396,12 +446,48 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
       }
     } catch (error) { setText(value); setNotice((error as Error).message); } finally { setSending(false); }
   }
-  const managedAdminChat = admin && match.mode === "managed";
-  const managedMemberChat = !admin && match.mode === "managed";
-  const otherPerson = managedAdminChat ? match.requester ?? match.persona : match.persona;
-  const myPerson = managedAdminChat ? match.persona : admin ? match.requester : profile ? { nickname: profile.nickname, gender: profile.gender, ageBand: profile.age_band, region: profile.region, job: profile.job, avatarId: profile.avatar_id, photoUrl: profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null } : null;
-  const canReply = match.status === "live" && (!admin || match.mode === "managed");
-  return <section className="sr-page sr-chat"><header className="sr-chat-head"><div className="sr-chat-nav"><button className="sr-icon-btn" onClick={onBack}><ArrowLeft /></button><strong>{managedAdminChat ? `${match.persona.nickname} 역할 대화` : "비밀 대화"}</strong>{!admin && <button className="sr-more" onClick={() => setMenu(!menu)}>•••</button>}</div><div className="sr-chat-person"><Avatar id={otherPerson.avatarId} photoUrl={otherPerson.photoUrl} /><div><small>{managedAdminChat ? "실제 회원" : "대화 상대"}</small><b>{otherPerson.nickname}{match.kind === "ai" && <em>AI</em>}</b><span><i /> {otherPerson.gender} · {otherPerson.ageBand} · {otherPerson.job}</span></div><button onClick={() => setShowIntro(!showIntro)}><Eye /> 자기소개</button></div>{myPerson && <div className="sr-chat-person mine"><Avatar id={myPerson.avatarId} photoUrl={myPerson.photoUrl} /><div><small>{managedAdminChat ? "내가 맡은 공개회원" : admin ? "회원" : "나"}</small><b>{myPerson.nickname}</b><span>{myPerson.gender} · {myPerson.ageBand} · {myPerson.job}</span></div></div>}</header>
+  async function uploadImage(file: File) {
+    if (!canReply || uploading) return;
+    setShowAttach(false); setUploading(true); setNotice("사진 용량을 줄이고 있어요…");
+    try {
+      const optimized = await optimizeChatImage(file);
+      const roomPath = encodeURIComponent(match.roomId);
+      const response = await fetch(`/api/cloudflare/rooms/${roomPath}/images`, {
+        method: "POST", credentials: "include", body: optimized.blob,
+        headers: {
+          "Content-Type": "image/jpeg",
+          "X-Image-Width": String(optimized.width),
+          "X-Image-Height": String(optimized.height),
+        },
+      });
+      const data = await response.json().catch(() => ({})) as { message?: Message; error?: string };
+      if (!response.ok) throw new Error(data.error || "사진을 보내지 못했습니다.");
+      const delivered = normalizeMessage(data.message);
+      if (delivered) setMessages((current) => current.some((item) => item.id === delivered.id) ? current : [...current, delivered]);
+      setNotice("사진을 보냈습니다. 이 사진은 대화 기록에 저장됩니다.");
+    } catch (error) {
+      setNotice((error as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+  function onDragEnter(event: React.DragEvent<HTMLElement>) {
+    if (!canReply || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault(); dragDepth.current += 1; setDragging(true);
+  }
+  function onDragLeave(event: React.DragEvent<HTMLElement>) {
+    if (!dragging) return;
+    event.preventDefault(); dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  }
+  function onDrop(event: React.DragEvent<HTMLElement>) {
+    if (!canReply) return;
+    event.preventDefault(); dragDepth.current = 0; setDragging(false);
+    const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/"));
+    if (!file) return setNotice("사진 파일 한 장을 놓아 주세요.");
+    void uploadImage(file);
+  }
+  return <section className={`sr-page sr-chat ${dragging ? "is-dragging" : ""}`} onDragEnter={onDragEnter} onDragOver={(event) => { if (canReply) event.preventDefault(); }} onDragLeave={onDragLeave} onDrop={onDrop}><header className="sr-chat-head"><div className="sr-chat-nav"><button className="sr-icon-btn" onClick={onBack}><ArrowLeft /></button><strong>{managedAdminChat ? `${match.persona.nickname} 역할 대화` : "비밀 대화"}</strong>{!admin && <button className="sr-more" onClick={() => setMenu(!menu)}>•••</button>}</div><div className="sr-chat-person"><Avatar id={otherPerson.avatarId} photoUrl={otherPerson.photoUrl} /><div><small>{managedAdminChat ? "실제 회원" : "대화 상대"}</small><b>{otherPerson.nickname}{match.kind === "ai" && <em>AI</em>}</b><span><i /> {otherPerson.gender} · {otherPerson.ageBand} · {otherPerson.job}</span></div><button onClick={() => setShowIntro(!showIntro)}><Eye /> 자기소개</button></div>{myPerson && <div className="sr-chat-person mine"><Avatar id={myPerson.avatarId} photoUrl={myPerson.photoUrl} /><div><small>{managedAdminChat ? "내가 맡은 공개회원" : admin ? "회원" : "나"}</small><b>{myPerson.nickname}</b><span>{myPerson.gender} · {myPerson.ageBand} · {myPerson.job}</span></div></div>}</header>
     {menu && <div className="sr-chat-menu"><p>불편한 대화인가요?</p><button onClick={async () => { try { await api(`/api/random/matches/${match.id}/report`, { method: "POST", body: JSON.stringify({ reason: "불쾌하거나 부적절한 대화" }) }); setNotice("신고가 접수되었습니다."); setMenu(false); } catch (e) { setNotice((e as Error).message); } }}><Flag /> 신고하기</button><button className="danger" onClick={async () => { if (!confirm("이 대화를 차단하고 끝낼까요?")) return; try { await api(`/api/random/matches/${match.id}/block`, { method: "POST" }); onBlocked?.(); } catch (e) { setNotice((e as Error).message); } }}><X /> 차단하고 끝내기</button></div>}
     {showIntro && <div className="sr-chat-intro"><b>{otherPerson.nickname}님의 자기소개</b><p>{otherPerson.introduction || "등록된 자기소개가 없습니다."}</p></div>}
     <div className={`sr-chat-info ${managedMemberChat ? "ready" : ""}`} aria-live="polite">{managedAdminChat ? `현재 ${match.persona.nickname} 역할로 답장합니다.` : admin ? "대화 기록 확인 · 직접 회원 간 대화에는 답장할 수 없습니다." : managedMemberChat ? `● LIVE · ${match.persona.nickname}님과 채팅 준비가 끝났어요. 메시지를 보내 보세요.` : match.kind === "ai" ? "AI가 답하는 대화입니다. 개인정보를 보내지 마세요." : "전화번호·주소·계좌번호는 보내지 마세요. 불편하면 신고하거나 차단하세요."}</div>
@@ -410,10 +496,18 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
       const messageId = message.id || `message-${index}`;
       return <div className={`sr-message ${mine ? "mine" : "theirs"}`} key={messageId}>
         {!mine && <Avatar id={otherPerson.avatarId} photoUrl={otherPerson.photoUrl} size="sm" />}
-        <div>{!mine && <small>{message.author || "상대"}</small>}<p>{message.text}</p><time>{messageTime(message.createdAt)}</time></div>
+        <div>{!mine && <small>{message.author || "상대"}</small>}{message.type === "image" && message.attachmentId
+          ? <a className="sr-chat-photo" href={`/api/cloudflare/files/${encodeURIComponent(message.attachmentId)}?view=inline`} target="_blank" rel="noreferrer" aria-label="사진 크게 보기"><img src={`/api/cloudflare/files/${encodeURIComponent(message.attachmentId)}?view=inline`} alt={`${message.author || "사용자"}님이 보낸 사진`} loading="lazy" width={message.imageWidth || undefined} height={message.imageHeight || undefined} /></a>
+          : <p>{message.text}</p>}<time>{messageTime(message.createdAt)}</time></div>
       </div>;
     })}</div>
-    {canReply ? <form className="sr-composer" onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="메시지를 입력하세요" maxLength={2000} /><button disabled={!text.trim() || sending} aria-label="보내기"><Send /></button></form> : <div className="sr-readonly">이 대화는 열람 전용입니다.</div>}
+    {dragging && <div className="sr-drop-photo"><ImagePlus /><b>사진 한 장을 여기에 놓으세요</b><span>자동으로 작게 줄여서 보냅니다.</span></div>}
+    {canReply ? <form className="sr-composer" onSubmit={send}>
+      {showAttach && <div className="sr-attach-menu" role="dialog" aria-label="사진 보내기"><b>사진 한 장 보내기</b><span>사진은 자동으로 저용량으로 줄어듭니다.</span><div><label><Camera /> 카메라 촬영<input type="file" accept="image/*" capture="environment" disabled={uploading} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void uploadImage(file); }} /></label><label><ImagePlus /> 사진 선택<input type="file" accept="image/*" disabled={uploading} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void uploadImage(file); }} /></label></div></div>}
+      <button type="button" className="sr-add-photo" disabled={uploading} aria-label="사진 보내기" aria-expanded={showAttach} onClick={() => setShowAttach((value) => !value)}><Plus /></button>
+      <input value={text} onChange={(e) => setText(e.target.value)} placeholder={uploading ? "사진을 줄이고 있어요…" : "메시지를 입력하세요"} maxLength={2000} disabled={uploading} />
+      <button className="sr-send" disabled={!text.trim() || sending || uploading} aria-label="보내기"><Send /></button>
+    </form> : <div className="sr-readonly">대화 내용과 사진은 그대로 보관됩니다. 이 대화는 현재 열람 전용입니다.</div>}
   </section>;
 }
 

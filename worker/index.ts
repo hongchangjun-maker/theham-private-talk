@@ -40,6 +40,11 @@ type MessageRecord = {
   author: string;
   text: string;
   createdAt: string;
+  type?: "text" | "image";
+  attachmentId?: string | null;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
+  byteSize?: number | null;
 };
 
 type ChatProfile = {
@@ -93,6 +98,7 @@ const PASSWORD_ITERATIONS = 100_000;
 const MAX_JSON_BYTES = 24_000;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024;
+const MAX_CHAT_IMAGE_BYTES = 1024 * 1024;
 const PUBLIC_WORKER_ORIGIN = "https://theham-private-talk.hhongcjun.workers.dev";
 const AVATAR_IDS = new Set(["f1", "f2", "f3", "f4", "f5", "m1", "m2", "m3", "m4", "m5"]);
 const PROFILE_GENDERS = ["여성", "남성", "기타", "공개 안 함"] as const;
@@ -144,10 +150,23 @@ export class ChatRoom extends DurableObject<AppEnv> {
           sender_id TEXT NOT NULL,
           author TEXT NOT NULL,
           text TEXT NOT NULL,
-          created_at TEXT NOT NULL
+          created_at TEXT NOT NULL,
+          message_type TEXT NOT NULL DEFAULT 'text',
+          attachment_id TEXT,
+          image_width INTEGER,
+          image_height INTEGER,
+          byte_size INTEGER
         );
         CREATE INDEX IF NOT EXISTS messages_created_idx ON messages(created_at DESC);
       `);
+      const columns = new Set(
+        [...this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(messages)")].map((column) => column.name),
+      );
+      if (!columns.has("message_type")) this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN message_type TEXT NOT NULL DEFAULT 'text'");
+      if (!columns.has("attachment_id")) this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN attachment_id TEXT");
+      if (!columns.has("image_width")) this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN image_width INTEGER");
+      if (!columns.has("image_height")) this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN image_height INTEGER");
+      if (!columns.has("byte_size")) this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN byte_size INTEGER");
     });
   }
 
@@ -156,11 +175,16 @@ export class ChatRoom extends DurableObject<AppEnv> {
     if (request.method === "GET" && url.pathname.endsWith("/export")) {
       const rows = [...this.ctx.storage.sql.exec<{
         id: string; room_id: string; sender_id: string; author: string; text: string; created_at: string;
-      }>("SELECT id, room_id, sender_id, author, text, created_at FROM messages ORDER BY created_at ASC")];
+        message_type: "text" | "image"; attachment_id: string | null; image_width: number | null;
+        image_height: number | null; byte_size: number | null;
+      }>(`SELECT id, room_id, sender_id, author, text, created_at, message_type, attachment_id,
+        image_width, image_height, byte_size FROM messages ORDER BY created_at ASC`)];
       return json({
         messages: rows.map((row) => ({
           id: row.id, roomId: row.room_id, senderId: row.sender_id, author: row.author,
-          text: row.text, createdAt: row.created_at,
+          text: row.text, createdAt: row.created_at, type: row.message_type,
+          attachmentId: row.attachment_id, imageWidth: row.image_width, imageHeight: row.image_height,
+          byteSize: row.byte_size,
         })),
       });
     }
@@ -173,8 +197,14 @@ export class ChatRoom extends DurableObject<AppEnv> {
         author: string;
         text: string;
         created_at: string;
+        message_type: "text" | "image";
+        attachment_id: string | null;
+        image_width: number | null;
+        image_height: number | null;
+        byte_size: number | null;
       }>(
-        "SELECT id, room_id, sender_id, author, text, created_at FROM messages ORDER BY created_at DESC LIMIT ?",
+        `SELECT id, room_id, sender_id, author, text, created_at, message_type, attachment_id,
+          image_width, image_height, byte_size FROM messages ORDER BY created_at DESC LIMIT ?`,
         limit,
       )].reverse();
       return json({
@@ -185,6 +215,11 @@ export class ChatRoom extends DurableObject<AppEnv> {
           author: row.author,
           text: row.text,
           createdAt: row.created_at,
+          type: row.message_type,
+          attachmentId: row.attachment_id,
+          imageWidth: row.image_width,
+          imageHeight: row.image_height,
+          byteSize: row.byte_size,
         })),
       });
     }
@@ -192,13 +227,21 @@ export class ChatRoom extends DurableObject<AppEnv> {
     if (request.method === "POST" && url.pathname.endsWith("/messages")) {
       const message = await request.json<MessageRecord>();
       this.ctx.storage.sql.exec(
-        "INSERT INTO messages (id, room_id, sender_id, author, text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        `INSERT INTO messages (
+          id, room_id, sender_id, author, text, created_at, message_type, attachment_id,
+          image_width, image_height, byte_size
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         message.id,
         message.roomId,
         message.senderId,
         message.author,
         message.text,
         message.createdAt,
+        message.type ?? "text",
+        message.attachmentId ?? null,
+        message.imageWidth ?? null,
+        message.imageHeight ?? null,
+        message.byteSize ?? null,
       );
       this.broadcast({ type: "message", message });
       return json({ message }, 201);
@@ -402,6 +445,18 @@ function profileChoice(value: unknown, label: string, allowed: readonly string[]
 
 function isUnsafeChat(text: string): boolean {
   return /(아동|미성년|초등학생|중학생).{0,12}(성관계|야한|누드|만남)|자살\s*(방법|하는법)|마약\s*(판매|구매)/i.test(text);
+}
+
+function validChatImage(bytes: Uint8Array, contentType: string): boolean {
+  if (contentType === "image/jpeg") {
+    return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+  if (contentType === "image/webp") {
+    return bytes.length >= 12
+      && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
+      && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP";
+  }
+  return false;
 }
 
 async function chatProfile(env: AppEnv, userId: string): Promise<ChatProfile | null> {
@@ -1556,6 +1611,75 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     return roomStub(env, roomId).fetch(new Request(request, { headers }));
   }
 
+  const chatImageMatch = url.pathname.match(/^\/api\/cloudflare\/rooms\/([^/]+)\/images$/);
+  if (chatImageMatch && request.method === "POST") {
+    const roomId = chatImageMatch[1];
+    await requireRoomMember(env, roomId, user.id);
+    const match = await env.DB.prepare(`
+      SELECT id, status, mode, operator_id, persona_nickname
+      FROM random_matches WHERE room_id = ? LIMIT 1
+    `).bind(roomId).first<{
+      id: string; status: string; mode: string; operator_id: string; persona_nickname: string;
+    }>();
+    if (match && match.status !== "live") throw new HttpError(409, "종료된 대화방에는 사진을 보낼 수 없습니다.");
+    if (user.role !== "member" && (!match || match.mode !== "managed" || match.operator_id !== user.id)) {
+      throw new HttpError(403, "이 대화에는 사진을 보낼 수 없습니다.");
+    }
+    const contentType = (request.headers.get("Content-Type") ?? "").split(";")[0].toLowerCase();
+    if (contentType !== "image/jpeg" && contentType !== "image/webp") {
+      throw new HttpError(415, "JPG 또는 WebP 사진만 올릴 수 있습니다.");
+    }
+    const declaredLength = Number(request.headers.get("Content-Length") ?? 0);
+    if (declaredLength > MAX_CHAT_IMAGE_BYTES) {
+      throw new HttpError(413, "사진을 더 작게 줄인 뒤 다시 올려 주세요.");
+    }
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_CHAT_IMAGE_BYTES) {
+      throw new HttpError(413, "사진을 더 작게 줄인 뒤 다시 올려 주세요.");
+    }
+    if (!validChatImage(bytes, contentType)) throw new HttpError(415, "올바른 사진 파일이 아닙니다.");
+    const imageWidth = Math.floor(Number(request.headers.get("X-Image-Width") ?? 0));
+    const imageHeight = Math.floor(Number(request.headers.get("X-Image-Height") ?? 0));
+    if (imageWidth < 1 || imageWidth > 4096 || imageHeight < 1 || imageHeight > 4096) {
+      throw new HttpError(400, "사진 크기를 확인하지 못했습니다.");
+    }
+    const fileId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const extension = contentType === "image/webp" ? "webp" : "jpg";
+    const fileName = `chat-photo-${now.replace(/[:.]/g, "-")}.${extension}`;
+    const storageKey = `chat-images/${roomId}/${fileId}.${extension}`;
+    const profile = user.role === "member" ? await chatProfile(env, user.id) : null;
+    const author = user.role === "member" ? profile?.nickname ?? user.display_name : match!.persona_nickname;
+    const message: MessageRecord = {
+      id: crypto.randomUUID(), roomId, senderId: user.id, author, text: "사진",
+      createdAt: now, type: "image", attachmentId: fileId, imageWidth, imageHeight,
+      byteSize: bytes.byteLength,
+    };
+    try {
+      await env.FILES.put(storageKey, bytes, {
+        httpMetadata: { contentType },
+        customMetadata: { roomId, uploaderId: user.id, messageId: message.id },
+      });
+      await env.DB.prepare(`
+        INSERT INTO files (id, room_id, uploader_id, storage_key, file_name, content_type, byte_size, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(fileId, roomId, user.id, storageKey, fileName, contentType, bytes.byteLength, now).run();
+      await roomStub(env, roomId).fetch(new Request(`${url.origin}/messages`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(message),
+      }));
+    } catch (error) {
+      await env.DB.prepare("DELETE FROM files WHERE id = ?").bind(fileId).run().catch(() => undefined);
+      await env.FILES.delete(storageKey).catch(() => undefined);
+      throw error;
+    }
+    await env.DB.prepare("UPDATE random_matches SET last_message_at = ? WHERE room_id = ?")
+      .bind(now, roomId).run();
+    ctx.waitUntil(audit(env, request, user.id, "chat.image_uploaded", "file", fileId, {
+      roomId, messageId: message.id, byteSize: bytes.byteLength, imageWidth, imageHeight,
+    }));
+    return json({ message }, 201);
+  }
+
   if (url.pathname === "/api/cloudflare/files" && request.method === "GET") {
     const roomId = url.searchParams.get("roomId") ?? "";
     await requireRoomMember(env, roomId, user.id);
@@ -1607,14 +1731,18 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       byte_size: number;
     }>();
     if (!metadata) throw new HttpError(404, "파일을 찾을 수 없습니다.");
-    await requireRoomMember(env, metadata.room_id, user.id);
+    if (user.role === "member") await requireRoomMember(env, metadata.room_id, user.id);
+    else requireAdmin(user);
     const object = await env.FILES.get(metadata.storage_key);
     if (!object) throw new HttpError(404, "저장된 파일을 찾을 수 없습니다.");
     const headers = new Headers();
     object.writeHttpMetadata(headers);
     headers.set("Content-Type", metadata.content_type);
     headers.set("Content-Length", String(metadata.byte_size));
-    headers.set("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(metadata.file_name)}`);
+    const inline = url.searchParams.get("view") === "inline" && metadata.content_type.startsWith("image/");
+    headers.set("Content-Disposition", inline
+      ? "inline"
+      : `attachment; filename*=UTF-8''${encodeURIComponent(metadata.file_name)}`);
     headers.set("Cache-Control", "private, no-store");
     return new Response(object.body, { headers });
   }

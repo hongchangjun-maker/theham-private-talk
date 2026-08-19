@@ -35,6 +35,13 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.match(component, /채팅 준비가 끝났어요/);
   assert.match(component, /setInterval\(\(\) => \{ void load\(\); \}, 2000\)/);
   assert.match(component, /회원이 채팅방에 들어오면 자동으로 불이 켜집니다/);
+  assert.match(component, /optimizeChatImage/);
+  assert.match(component, /capture="environment"/);
+  assert.match(component, /onDragEnter=\{onDragEnter\}/);
+  assert.match(component, /사진은 자동으로 저용량으로 줄어듭니다/);
+  assert.match(component, /\/api\/cloudflare\/rooms\/\$\{roomPath\}\/images/);
+  assert.match(component, /attachmentId.*view=inline/s);
+  assert.match(component, /대화 내용과 사진은 그대로 보관됩니다/);
   assert.doesNotMatch(component, /테스트\s*운영자 대행|모니터링|감시/);
   assert.match(component, /신고하기/);
   assert.match(component, /차단하고 끝내기/);
@@ -69,6 +76,14 @@ test("Worker owns signup, random matching, realtime chat, AI, and moderation rou
   assert.match(source, /종료된 대화방에는 메시지를 보낼 수 없습니다/);
   assert.match(source, /WHERE m\.status = 'live'/);
   assert.match(source, /차단한 상대와는 새 대화를 시작할 수 없습니다/);
+  assert.match(source, /MAX_CHAT_IMAGE_BYTES/);
+  assert.match(source, /const chatImageMatch = url\.pathname\.match/);
+  assert.match(source, /chatImageMatch && request\.method === "POST"/);
+  assert.match(source, /message_type TEXT NOT NULL DEFAULT 'text'/);
+  assert.match(source, /chat-images\/\$\{roomId\}/);
+  assert.match(source, /chat\.image_uploaded/);
+  assert.match(source, /url\.searchParams\.get\("view"\) === "inline"/);
+  assert.match(source, /WHERE m\.requester_id = \? OR \(m\.mode = 'direct' AND m\.target_user_id = \?\)/);
   assert.match(source, /userId: row\.target_user_id/);
   assert.match(source, /HttpOnly; Secure; SameSite=Lax/);
 });
