@@ -11,6 +11,7 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.match(component, /phoneNumber/);
   assert.match(component, /전화번호 전체/);
   assert.match(component, /전화번호 끝 4자리/);
+  assert.match(component, /대화했던 사람과 다시 대화하고 싶으시면 즐겨찾기,채팅 시간을 약속하시기 바랍니다/);
   assert.match(component, /채팅 닉네임.*maxLength=\{10\}/);
   assert.match(component, /2~10글자/);
   assert.match(component, /JSON\.stringify\(\{ name, phoneLast4 \}\)/);
@@ -42,6 +43,11 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.match(component, /\/api\/cloudflare\/rooms\/\$\{roomPath\}\/images/);
   assert.match(component, /attachmentId.*view=inline/s);
   assert.match(component, /대화 내용과 사진은 그대로 보관됩니다/);
+  assert.match(component, /관계레벨/);
+  assert.match(component, /어색함.*친해짐.*스킨십.*키스.*러브/);
+  assert.match(component, /이 사람 매너\(호감도\)/);
+  assert.match(component, /관계레벨 UP!/);
+  assert.match(component, /playRelationshipFanfare/);
   assert.doesNotMatch(component, /테스트\s*운영자 대행|모니터링|감시/);
   assert.match(component, /신고하기/);
   assert.match(component, /차단하고 끝내기/);
@@ -82,6 +88,10 @@ test("Worker owns signup, random matching, realtime chat, AI, and moderation rou
   assert.match(source, /message_type TEXT NOT NULL DEFAULT 'text'/);
   assert.match(source, /chat-images\/\$\{roomId\}/);
   assert.match(source, /chat\.image_uploaded/);
+  assert.match(source, /relationshipPointsFor/);
+  assert.match(source, /relationshipMatch = url\.pathname\.match/);
+  assert.match(source, /ratingMatch = url\.pathname\.match/);
+  assert.match(source, /chat\.rating_saved/);
   assert.match(source, /url\.searchParams\.get\("view"\) === "inline"/);
   assert.match(source, /WHERE m\.requester_id = \? OR \(m\.mode = 'direct' AND m\.target_user_id = \?\)/);
   assert.match(source, /userId: row\.target_user_id/);
@@ -102,12 +112,13 @@ test("PWA manifest and service worker use the new product branding", async () =>
 });
 
 test("Cloudflare schema hashes access data and provides moderation tables", async () => {
-  const [schema, randomChatMigration, phoneIdentityMigration, datingMigration, presenceMigration] = await Promise.all([
+  const [schema, randomChatMigration, phoneIdentityMigration, datingMigration, presenceMigration, relationshipMigration] = await Promise.all([
     readFile(new URL("../migrations/0001_cloudflare_core.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0003_secret_roulette.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0004_phone_identity.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0005_dating_profiles_and_monitoring.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0006_live_chat_presence.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0007_relationship_and_ratings.sql", import.meta.url), "utf8"),
   ]);
   assert.match(schema, /token_hash TEXT PRIMARY KEY/i);
   assert.doesNotMatch(schema, /\btoken TEXT\b/i);
@@ -123,4 +134,8 @@ test("Cloudflare schema hashes access data and provides moderation tables", asyn
   assert.match(datingMigration, /last_message_at TEXT/i);
   assert.match(presenceMigration, /CREATE TABLE IF NOT EXISTS chat_presence/i);
   assert.match(presenceMigration, /CHECK \(state IN \('waiting'\)\)/i);
+  assert.match(relationshipMigration, /relationship_points/i);
+  assert.match(relationshipMigration, /relationship_level/i);
+  assert.match(relationshipMigration, /CREATE TABLE IF NOT EXISTS chat_ratings/i);
+  assert.match(relationshipMigration, /CHECK \(score BETWEEN 1 AND 5\)/i);
 });

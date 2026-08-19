@@ -5,7 +5,7 @@
 import {
   ArrowLeft, Bot, Camera, Check, ChevronRight, CircleUserRound, Download, Eye, Flag, Heart,
   ImagePlus, Info, LockKeyhole, LogOut, MessageCircleHeart, Plus, Send, ShieldCheck, Sparkles,
-  UserRoundSearch, UsersRound, X,
+  Star, UserRoundSearch, UsersRound, X,
 } from "lucide-react";
 import { Component, ErrorInfo, FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
@@ -118,6 +118,33 @@ const ageBands = ["상관없음", "20대", "30대", "40대", "50대 이상"];
 const profileAges = ageBands.slice(1);
 const jobs = ["상관없음", "회사원", "자영업", "프리랜서", "전문직", "공무원", "학생", "기타"];
 const profileJobs = jobs.slice(1);
+const relationshipLabels = ["", "어색함", "친해짐", "스킨십", "키스", "러브"] as const;
+const relationshipCheers = ["", "", "두 분이 조금 더 가까워졌어요!", "서로 편안한 사이가 되었어요!", "설레는 마음이 커졌어요!", "러브 단계에 도착했어요!"] as const;
+
+function playRelationshipFanfare() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    void context.resume().then(() => {
+      const start = context.currentTime;
+      [523.25, 659.25, 783.99, 1046.5].forEach((frequency, index) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "triangle";
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.0001, start + index * 0.11);
+        gain.gain.exponentialRampToValueAtTime(0.12, start + index * 0.11 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + index * 0.11 + 0.35);
+        oscillator.connect(gain); gain.connect(context.destination);
+        oscillator.start(start + index * 0.11); oscillator.stop(start + index * 0.11 + 0.37);
+      });
+      window.setTimeout(() => { void context.close(); }, 1200);
+    }).catch(() => { void context.close(); });
+  } catch {
+    // Visual celebration remains available when the device blocks sound.
+  }
+}
 
 function avatarSrc(id?: string) {
   return avatars.find((item) => item.id === id)?.src ?? "/avatars/f2.webp";
@@ -321,6 +348,7 @@ function MemberLogin({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit:
   const [name, setName] = useState(""); const [phone, setPhone] = useState("");
   return <section className="sr-page"><TopBar title="다시 들어오기" onBack={onBack} /><form className="sr-auth-card" onSubmit={(e) => { e.preventDefault(); onSubmit(name, phone); }}>
     <div className="sr-round-icon"><CircleUserRound /></div><h2>가입할 때 쓴 내용을 적으세요</h2><p>이름과 전화번호 끝 4자리만 있으면 돼요.</p>
+    <div className="sr-login-reminder"><Heart /><span>대화했던 사람과 다시 대화하고 싶으시면 즐겨찾기,채팅 시간을 약속하시기 바랍니다</span></div>
     <label>이름<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={40} required /></label>
     <label>전화번호 끝 4자리<input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" autoComplete="tel" pattern="\d{4}" required /></label>
     <button className="sr-primary sr-big" disabled={busy}>{busy ? "확인 중…" : "내 채팅으로 들어가기"}</button>
@@ -375,13 +403,37 @@ function Roulette() {
 function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { match: Match; user: User; profile: Profile | null; admin: boolean; onBack: () => void; onBlocked?: () => void; setNotice: (v: string) => void }) {
   const [messages, setMessages] = useState<Message[]>([]); const [text, setText] = useState(""); const [sending, setSending] = useState(false); const [menu, setMenu] = useState(false); const [showIntro, setShowIntro] = useState(false);
   const [showAttach, setShowAttach] = useState(false); const [uploading, setUploading] = useState(false); const [dragging, setDragging] = useState(false);
+  const [relationshipLevel, setRelationshipLevel] = useState(1); const [rating, setRating] = useState(0); const [savingRating, setSavingRating] = useState(false); const [celebrationLevel, setCelebrationLevel] = useState<number | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const dragDepth = useRef(0);
+  const relationshipReady = useRef(false); const relationshipLevelRef = useRef(1); const celebrationTimer = useRef<number | null>(null);
   const managedAdminChat = admin && match.mode === "managed";
   const managedMemberChat = !admin && match.mode === "managed";
   const otherPerson = managedAdminChat ? match.requester ?? match.persona : match.persona;
   const myPerson = managedAdminChat ? match.persona : admin ? match.requester : profile ? { nickname: profile.nickname, gender: profile.gender, ageBand: profile.age_band, region: profile.region, job: profile.job, avatarId: profile.avatar_id, photoUrl: profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null } : null;
   const canReply = match.status === "live" && (!admin || match.mode === "managed");
+  const syncRelationship = useCallback(async (allowCelebration = true) => {
+    if (match.kind === "ai") return;
+    try {
+      const data = await api<{ level: number; rating: number | null }>(`/api/random/matches/${encodeURIComponent(match.id)}/relationship`);
+      const nextLevel = Math.min(5, Math.max(1, Number(data.level) || 1));
+      if (relationshipReady.current && allowCelebration && nextLevel > relationshipLevelRef.current) {
+        setCelebrationLevel(nextLevel); playRelationshipFanfare();
+        if (celebrationTimer.current) window.clearTimeout(celebrationTimer.current);
+        celebrationTimer.current = window.setTimeout(() => setCelebrationLevel(null), 3800);
+      }
+      relationshipReady.current = true; relationshipLevelRef.current = nextLevel;
+      setRelationshipLevel(nextLevel); setRating(Number(data.rating) || 0);
+    } catch {
+      // Messages remain usable if the small relationship panel cannot refresh.
+    }
+  }, [match.id, match.kind]);
+  useEffect(() => {
+    if (match.kind === "ai") return;
+    const initial = window.setTimeout(() => { void syncRelationship(false); }, 0);
+    const timer = window.setInterval(() => { void syncRelationship(true); }, 2000);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); if (celebrationTimer.current) window.clearTimeout(celebrationTimer.current); };
+  }, [match.id, match.kind, syncRelationship]);
   useEffect(() => {
     let socket: WebSocket | null = null; let cancelled = false; let syncing = false;
     const roomPath = encodeURIComponent(match.roomId);
@@ -443,6 +495,7 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
           const known = new Set(current.map((item) => item.id));
           return [...current, ...delivered.filter((item) => !known.has(item.id))];
         });
+        void syncRelationship(true);
       }
     } catch (error) { setText(value); setNotice((error as Error).message); } finally { setSending(false); }
   }
@@ -487,9 +540,18 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
     if (!file) return setNotice("사진 파일 한 장을 놓아 주세요.");
     void uploadImage(file);
   }
+  async function saveRating(score: number) {
+    if (savingRating || messages.length === 0) return;
+    setSavingRating(true);
+    try {
+      const data = await api<{ score: number }>(`/api/random/matches/${encodeURIComponent(match.id)}/rating`, { method: "POST", body: JSON.stringify({ score }) });
+      setRating(data.score); setNotice(`${otherPerson.nickname}님에게 매너점수 ${data.score}점을 남겼습니다.`);
+    } catch (error) { setNotice((error as Error).message); } finally { setSavingRating(false); }
+  }
   return <section className={`sr-page sr-chat ${dragging ? "is-dragging" : ""}`} onDragEnter={onDragEnter} onDragOver={(event) => { if (canReply) event.preventDefault(); }} onDragLeave={onDragLeave} onDrop={onDrop}><header className="sr-chat-head"><div className="sr-chat-nav"><button className="sr-icon-btn" onClick={onBack}><ArrowLeft /></button><strong>{managedAdminChat ? `${match.persona.nickname} 역할 대화` : "비밀 대화"}</strong>{!admin && <button className="sr-more" onClick={() => setMenu(!menu)}>•••</button>}</div><div className="sr-chat-person"><Avatar id={otherPerson.avatarId} photoUrl={otherPerson.photoUrl} /><div><small>{managedAdminChat ? "실제 회원" : "대화 상대"}</small><b>{otherPerson.nickname}{match.kind === "ai" && <em>AI</em>}</b><span><i /> {otherPerson.gender} · {otherPerson.ageBand} · {otherPerson.job}</span></div><button onClick={() => setShowIntro(!showIntro)}><Eye /> 자기소개</button></div>{myPerson && <div className="sr-chat-person mine"><Avatar id={myPerson.avatarId} photoUrl={myPerson.photoUrl} /><div><small>{managedAdminChat ? "내가 맡은 공개회원" : admin ? "회원" : "나"}</small><b>{myPerson.nickname}</b><span>{myPerson.gender} · {myPerson.ageBand} · {myPerson.job}</span></div></div>}</header>
     {menu && <div className="sr-chat-menu"><p>불편한 대화인가요?</p><button onClick={async () => { try { await api(`/api/random/matches/${match.id}/report`, { method: "POST", body: JSON.stringify({ reason: "불쾌하거나 부적절한 대화" }) }); setNotice("신고가 접수되었습니다."); setMenu(false); } catch (e) { setNotice((e as Error).message); } }}><Flag /> 신고하기</button><button className="danger" onClick={async () => { if (!confirm("이 대화를 차단하고 끝낼까요?")) return; try { await api(`/api/random/matches/${match.id}/block`, { method: "POST" }); onBlocked?.(); } catch (e) { setNotice((e as Error).message); } }}><X /> 차단하고 끝내기</button></div>}
     {showIntro && <div className="sr-chat-intro"><b>{otherPerson.nickname}님의 자기소개</b><p>{otherPerson.introduction || "등록된 자기소개가 없습니다."}</p></div>}
+    {match.kind !== "ai" && <div className="sr-relationship"><div className="sr-relationship-level"><span>관계레벨</span><b>{relationshipLevel}단계 · {relationshipLabels[relationshipLevel]}</b><div aria-label={`관계레벨 ${relationshipLevel}단계`}>{[1, 2, 3, 4, 5].map((level) => <i key={level} className={level <= relationshipLevel ? "active" : ""} />)}</div></div>{!admin && <div className="sr-manner-rating"><span>이 사람 매너(호감도)</span><div role="group" aria-label="매너 호감도 별점">{[1, 2, 3, 4, 5].map((score) => <button type="button" key={score} disabled={savingRating || messages.length === 0} className={score <= rating ? "selected" : ""} onClick={() => void saveRating(score)} aria-label={`${score}점 주기`}><Star /></button>)}</div><small>{messages.length === 0 ? "대화를 나눈 뒤 별을 눌러 주세요" : rating ? `${rating}점을 남겼어요 · 다시 눌러 변경 가능` : "대화 후 별을 눌러 주세요"}</small></div>}</div>}
     <div className={`sr-chat-info ${managedMemberChat ? "ready" : ""}`} aria-live="polite">{managedAdminChat ? `현재 ${match.persona.nickname} 역할로 답장합니다.` : admin ? "대화 기록 확인 · 직접 회원 간 대화에는 답장할 수 없습니다." : managedMemberChat ? `● LIVE · ${match.persona.nickname}님과 채팅 준비가 끝났어요. 메시지를 보내 보세요.` : match.kind === "ai" ? "AI가 답하는 대화입니다. 개인정보를 보내지 마세요." : "전화번호·주소·계좌번호는 보내지 마세요. 불편하면 신고하거나 차단하세요."}</div>
     <div className="sr-messages" ref={messagesRef}><div className="sr-day">오늘</div>{messages.length === 0 && <div className="sr-empty-chat"><MessageCircleHeart /><b>연결되었어요!</b><span>먼저 “안녕하세요”라고 보내 보세요.</span></div>}{messages.map((message, index) => {
       const mine = message.senderId === user.id;
@@ -502,6 +564,7 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
       </div>;
     })}</div>
     {dragging && <div className="sr-drop-photo"><ImagePlus /><b>사진 한 장을 여기에 놓으세요</b><span>자동으로 작게 줄여서 보냅니다.</span></div>}
+    {celebrationLevel && <div className="sr-level-celebration" role="status" aria-live="assertive"><div className="sr-fireworks" aria-hidden="true">{Array.from({ length: 20 }, (_, index) => <i key={index} style={{ "--piece": index } as React.CSSProperties} />)}</div><Sparkles /><small>관계레벨 UP!</small><b>{celebrationLevel}단계 · {relationshipLabels[celebrationLevel]}</b><p>{relationshipCheers[celebrationLevel]}</p></div>}
     {canReply ? <form className="sr-composer" onSubmit={send}>
       {showAttach && <div className="sr-attach-menu" role="dialog" aria-label="사진 보내기"><b>사진 한 장 보내기</b><span>사진은 자동으로 저용량으로 줄어듭니다.</span><div><label><Camera /> 카메라 촬영<input type="file" accept="image/*" capture="environment" disabled={uploading} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void uploadImage(file); }} /></label><label><ImagePlus /> 사진 선택<input type="file" accept="image/*" disabled={uploading} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void uploadImage(file); }} /></label></div></div>}
       <button type="button" className="sr-add-photo" disabled={uploading} aria-label="사진 보내기" aria-expanded={showAttach} onClick={() => setShowAttach((value) => !value)}><Plus /></button>

@@ -79,6 +79,8 @@ type RandomMatch = {
   target_user_id: string | null;
   mode: "managed" | "direct" | "ai";
   last_message_at: string | null;
+  relationship_points?: number;
+  relationship_level?: number;
   requester_nickname?: string;
   requester_gender?: string;
   requester_region?: string;
@@ -106,6 +108,7 @@ const PROFILE_AGES = ["20대", "30대", "40대", "50대 이상"] as const;
 const PROFILE_REGIONS = ["서울", "경기", "인천", "부산", "대구", "대전", "광주", "울산", "강원", "충청", "전라", "경상", "제주"] as const;
 const PROFILE_JOBS = ["회사원", "자영업", "프리랜서", "전문직", "공무원", "학생", "기타"] as const;
 const AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
+const RELATIONSHIP_LABELS = ["", "어색함", "친해짐", "스킨십", "키스", "러브"] as const;
 
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "Content-Security-Policy": [
@@ -445,6 +448,38 @@ function profileChoice(value: unknown, label: string, allowed: readonly string[]
 
 function isUnsafeChat(text: string): boolean {
   return /(아동|미성년|초등학생|중학생).{0,12}(성관계|야한|누드|만남)|자살\s*(방법|하는법)|마약\s*(판매|구매)/i.test(text);
+}
+
+function relationshipPointsFor(text: string): number {
+  const signals = [
+    /좋아|호감|마음에\s*들|보고\s*싶|그리워|설레|사랑/u,
+    /멋지|예쁘|아름답|귀엽|잘생|최고|대단|매력|따뜻|친절/u,
+    /재밌|즐거|행복|웃겨|기뻐|신나|고마워|감사|❤️|♥|💕|💖|😍|🥰|😊|😄|😘|💋/u,
+  ];
+  return signals.reduce((points, pattern) => points + (pattern.test(text) ? 1 : 0), 0);
+}
+
+function relationshipLevelFor(points: number): number {
+  if (points >= 18) return 5;
+  if (points >= 12) return 4;
+  if (points >= 7) return 3;
+  if (points >= 3) return 2;
+  return 1;
+}
+
+async function updateRelationship(env: AppEnv, matchId: string, text: string): Promise<{ level: number; points: number; levelUp: boolean }> {
+  const current = await env.DB.prepare(`
+    SELECT relationship_points, relationship_level FROM random_matches
+    WHERE id = ? AND kind = 'operator' LIMIT 1
+  `).bind(matchId).first<{ relationship_points: number; relationship_level: number }>();
+  if (!current) return { level: 1, points: 0, levelUp: false };
+  const points = Math.max(0, current.relationship_points) + relationshipPointsFor(text);
+  const calculatedLevel = relationshipLevelFor(points);
+  const level = Math.min(current.relationship_level + 1, Math.max(current.relationship_level, calculatedLevel));
+  await env.DB.prepare(`
+    UPDATE random_matches SET relationship_points = ?, relationship_level = ? WHERE id = ?
+  `).bind(points, level, matchId).run();
+  return { level, points, levelUp: level > current.relationship_level };
 }
 
 function validChatImage(bytes: Uint8Array, contentType: string): boolean {
@@ -1343,6 +1378,65 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
   }
 
   const reportMatch = url.pathname.match(/^\/api\/random\/matches\/([^/]+)\/report$/);
+
+  const relationshipMatch = url.pathname.match(/^\/api\/random\/matches\/([^/]+)\/relationship$/);
+  if (relationshipMatch && request.method === "GET") {
+    const match = await env.DB.prepare(`
+      SELECT id, room_id, requester_id, target_user_id, operator_id, mode, kind,
+        relationship_points, relationship_level
+      FROM random_matches WHERE id = ? LIMIT 1
+    `).bind(relationshipMatch[1]).first<{
+      id: string; room_id: string; requester_id: string; target_user_id: string | null;
+      operator_id: string; mode: string; kind: string; relationship_points: number; relationship_level: number;
+    }>();
+    if (!match) throw new HttpError(404, "대화를 찾을 수 없습니다.");
+    const isParticipant = match.requester_id === user.id || (match.mode === "direct" && match.target_user_id === user.id);
+    const isOperator = user.role !== "member" && match.operator_id === user.id;
+    if (!isParticipant && !isOperator) throw new HttpError(403, "이 관계레벨을 볼 수 없습니다.");
+    const rating = user.role === "member" ? await env.DB.prepare(`
+      SELECT score FROM chat_ratings WHERE match_id = ? AND rater_id = ? LIMIT 1
+    `).bind(match.id, user.id).first<{ score: number }>() : null;
+    const level = Math.min(5, Math.max(1, Number(match.relationship_level) || 1));
+    return json({
+      level,
+      points: Math.max(0, Number(match.relationship_points) || 0),
+      label: RELATIONSHIP_LABELS[level],
+      rating: rating?.score ?? null,
+    });
+  }
+
+  const ratingMatch = url.pathname.match(/^\/api\/random\/matches\/([^/]+)\/rating$/);
+  if (ratingMatch && request.method === "POST") {
+    if (user.role !== "member") throw new HttpError(403, "회원만 매너점수를 줄 수 있습니다.");
+    const match = await env.DB.prepare(`
+      SELECT id, room_id, requester_id, target_user_id, mode, kind
+      FROM random_matches WHERE id = ? LIMIT 1
+    `).bind(ratingMatch[1]).first<{
+      id: string; room_id: string; requester_id: string; target_user_id: string | null;
+      mode: string; kind: string;
+    }>();
+    if (!match || match.kind !== "operator") throw new HttpError(404, "점수를 줄 대화를 찾을 수 없습니다.");
+    const isRequester = match.requester_id === user.id;
+    const isDirectTarget = match.mode === "direct" && match.target_user_id === user.id;
+    if (!isRequester && !isDirectTarget) throw new HttpError(403, "이 상대에게 점수를 줄 수 없습니다.");
+    const body = await readJsonBody<{ score?: unknown }>(request);
+    const score = Number(body.score);
+    if (!Number.isInteger(score) || score < 1 || score > 5) throw new HttpError(400, "별점은 1점부터 5점까지 선택해 주세요.");
+    const historyResponse = await roomStub(env, match.room_id).fetch(new Request(`${url.origin}/history?limit=1`));
+    const history = await historyResponse.json<{ messages?: MessageRecord[] }>();
+    if (!history.messages?.length) throw new HttpError(409, "먼저 실제 대화를 나눈 뒤 매너점수를 주세요.");
+    const ratedUserId = isRequester ? match.target_user_id : match.requester_id;
+    const now = new Date().toISOString();
+    await env.DB.prepare(`
+      INSERT INTO chat_ratings (match_id, rater_id, rated_user_id, score, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(match_id, rater_id) DO UPDATE SET
+        rated_user_id = excluded.rated_user_id, score = excluded.score, updated_at = excluded.updated_at
+    `).bind(match.id, user.id, ratedUserId, score, now, now).run();
+    await audit(env, request, user.id, "chat.rating_saved", "match", match.id, { score, ratedUserId });
+    return json({ score });
+  }
+
   if (reportMatch && request.method === "POST") {
     const row = await env.DB.prepare(`
       SELECT id FROM random_matches WHERE id = ?
@@ -1550,6 +1644,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     }));
     await env.DB.prepare("UPDATE random_matches SET last_message_at = ? WHERE id = ?")
       .bind(message.createdAt, match.id).run();
+    await updateRelationship(env, match.id, text);
     return json({ message }, 201);
   }
 
@@ -1578,8 +1673,8 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const body = await readJsonBody<{ text?: unknown }>(request);
     const text = String(body.text ?? "").trim();
     if (!text || text.length > 4_000) throw new HttpError(400, "메시지는 1자 이상 4,000자 이하로 입력해 주세요.");
-    const randomMatch = await env.DB.prepare("SELECT status FROM random_matches WHERE room_id = ? LIMIT 1")
-      .bind(roomId).first<{ status: string }>();
+    const randomMatch = await env.DB.prepare("SELECT id, status, kind FROM random_matches WHERE room_id = ? LIMIT 1")
+      .bind(roomId).first<{ id: string; status: string; kind: string }>();
     if (randomMatch && randomMatch.status !== "live") throw new HttpError(409, "종료된 대화방에는 메시지를 보낼 수 없습니다.");
     if (isUnsafeChat(text)) throw new HttpError(400, "안전 규칙에 어긋나는 내용은 보낼 수 없습니다.");
     const profile = await chatProfile(env, user.id);
@@ -1598,6 +1693,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     }));
     await env.DB.prepare("UPDATE random_matches SET last_message_at = ? WHERE room_id = ?")
       .bind(message.createdAt, roomId).run();
+    if (randomMatch?.kind === "operator") await updateRelationship(env, randomMatch.id, text);
     return response;
   }
 
