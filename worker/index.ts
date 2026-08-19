@@ -604,7 +604,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       database = false;
     }
     return json({
-      service: "THEHAM PRIVATE TALK",
+      service: "전국비밀채팅",
       ok: database,
       backend: "cloudflare",
       integrations: {
@@ -640,7 +640,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       env.DB.prepare(`
         INSERT INTO users (id, email, display_name, organization, role, status, password_hash, password_salt, password_iterations, created_at, updated_at, approved_at)
         VALUES (?, ?, ?, ?, 'super_admin', 'active', ?, ?, ?, ?, ?, ?)
-      `).bind(userId, email, displayName, "THEHAM", passwordData.hash, passwordData.salt, passwordData.iterations, now, now, now),
+      `).bind(userId, email, displayName, "전국비밀채팅", passwordData.hash, passwordData.salt, passwordData.iterations, now, now, now),
       env.DB.prepare(`
         INSERT INTO rooms (id, name, description, room_type, owner_id, created_at)
         VALUES (?, '운영 공지', '승인된 구성원을 위한 기본 비공개 대화방', 'notice', ?, ?)
@@ -662,7 +662,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const body = await readJsonBody<{
       name?: unknown; phoneNumber?: unknown; nickname?: unknown; avatarId?: unknown;
       gender?: unknown; ageBand?: unknown; region?: unknown; job?: unknown; introduction?: unknown;
-      adultAccepted?: unknown; termsAccepted?: unknown; monitoringAccepted?: unknown;
+      adultAccepted?: unknown; termsAccepted?: unknown; safetyAccepted?: unknown; monitoringAccepted?: unknown;
     }>(request);
     const name = identityName(body.name);
     const phoneNumber = assertPhoneNumber(body.phoneNumber);
@@ -675,8 +675,8 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const job = profileChoice(body.job, "직업", PROFILE_JOBS);
     const introduction = cleanText(body.introduction, 240);
     if (introduction.length < 2) throw new HttpError(400, "간단한 자기소개를 2글자 이상 입력해 주세요.");
-    if (body.adultAccepted !== true || body.termsAccepted !== true || body.monitoringAccepted !== true) {
-      throw new HttpError(400, "성인 확인, 이용규칙과 대화 저장·운영 열람 안내 동의가 필요합니다.");
+    if (body.adultAccepted !== true || body.termsAccepted !== true || (body.safetyAccepted !== true && body.monitoringAccepted !== true)) {
+      throw new HttpError(400, "성인 확인, 이용규칙과 안전한 매너 채팅 약속이 필요합니다.");
     }
     const phoneNumberHash = await protectedIdentityHash(env, "phone", phoneNumber);
     const loginKeyHash = await protectedIdentityHash(env, "login", `${name.toLowerCase()}:${phoneLast4}`);
@@ -1409,7 +1409,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       });
     }
     await audit(env, request, user.id, "chat.exported", "conversation", null, { conversationCount: conversations.length });
-    const fileName = `theham-chat-export-${new Date().toISOString().slice(0, 10)}.json`;
+    const fileName = `jeonguk-secret-chat-export-${new Date().toISOString().slice(0, 10)}.json`;
     return new Response(JSON.stringify({ exportedAt: new Date().toISOString(), conversations }, null, 2), {
       headers: {
         "Content-Type": "application/json; charset=utf-8",

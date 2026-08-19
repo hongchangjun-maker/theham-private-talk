@@ -119,7 +119,7 @@ export function SecretRouletteApp() {
   return (
     <main className="sr-stage">
       <div className="sr-phone">
-        <div className="sr-status"><span>THEHAM</span><span className="sr-status-live">● 안전 연결</span></div>
+        <div className="sr-status"><span>전국비밀채팅</span><span className="sr-status-live">● 안전 연결</span></div>
         <div className="sr-screen">
           {notice && <div className="sr-toast" role="status">{notice}<button onClick={() => setNotice("")}><X /></button></div>}
           {screen === "loading" && <Loading />}
@@ -186,7 +186,7 @@ function Welcome({ onSignup, onLogin, onAdmin }: { onSignup: () => void; onLogin
   return (
     <section className="sr-welcome">
       <div className="sr-welcome-art"><div className="sr-orbit"><Avatar id="f3" size="lg" /><Avatar id="m2" size="lg" /></div></div>
-      <div className="sr-brand"><span className="sr-brand-mark"><MessageCircleHeart /></span><p>THEHAM</p><h1>비밀친구</h1><span>AI 또는 새로운 사람과<br />편안하게 이야기해 보세요.</span></div>
+      <div className="sr-brand"><span className="sr-brand-mark"><MessageCircleHeart /></span><h1>전국비밀채팅</h1><span>AI 또는 새로운 사람과<br />편안하게 이야기해 보세요.</span></div>
       <div className="sr-welcome-actions">
         <button className="sr-primary sr-big" onClick={onSignup}><Heart /> 처음이에요 · 회원가입</button>
         <button className="sr-secondary sr-big" onClick={onLogin}><CircleUserRound /> 이미 가입했어요</button>
@@ -201,9 +201,9 @@ function Signup({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (dat
   const [name, setName] = useState(""); const [phone, setPhone] = useState(""); const [nickname, setNickname] = useState("");
   const [gender, setGender] = useState("여성"); const [ageBand, setAgeBand] = useState("20대"); const [region, setRegion] = useState("서울"); const [job, setJob] = useState("회사원");
   const [introduction, setIntroduction] = useState(""); const [avatarId, setAvatarId] = useState(""); const [photo, setPhoto] = useState<File | null>(null);
-  const [adult, setAdult] = useState(false); const [terms, setTerms] = useState(false); const [monitoring, setMonitoring] = useState(false);
+  const [adult, setAdult] = useState(false); const [terms, setTerms] = useState(false); const [safety, setSafety] = useState(false);
   function pickPhoto(file?: File) { if (file) setPhoto(file); }
-  function submit(event: FormEvent) { event.preventDefault(); onSubmit({ name, phoneNumber: phone, nickname, gender, ageBand, region, job, introduction, avatarId, adultAccepted: adult, termsAccepted: terms, monitoringAccepted: monitoring }, photo); }
+  function submit(event: FormEvent) { event.preventDefault(); onSubmit({ name, phoneNumber: phone, nickname, gender, ageBand, region, job, introduction, avatarId, adultAccepted: adult, termsAccepted: terms, safetyAccepted: safety }, photo); }
   return <section className="sr-page"><TopBar title="회원가입" onBack={onBack} /><form className="sr-scroll sr-form" onSubmit={submit}>
     <div className="sr-step-title"><span>1</span><div><strong>내 정보를 적어 주세요</strong><p>이름과 전화번호는 다른 사람에게 보이지 않아요.</p></div></div>
     <label>이름<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={40} required /></label>
@@ -220,8 +220,8 @@ function Signup({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (dat
     <div className="sr-step-title"><span>3</span><div><strong>안전 약속을 확인해 주세요</strong></div></div>
     <label className="sr-check"><input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} /><span><b>나는 만 19세 이상 성인입니다.</b></span></label>
     <label className="sr-check"><input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} /><span><b>욕설·괴롭힘·불법 대화를 하지 않겠습니다.</b><small><a href="/terms" target="_blank">이용규칙</a>과 <a href="/privacy" target="_blank">개인정보 안내</a>에 동의합니다.</small></span></label>
-    <label className="sr-check"><input type="checkbox" checked={monitoring} onChange={(e) => setMonitoring(e.target.checked)} /><span><b>대화 저장과 운영 열람 안내를 확인했습니다.</b><small>대화 이어보기와 신고·안전 대응을 위해 대화가 저장되고 권한 있는 관리자가 열람·내보낼 수 있습니다.</small></span></label>
-    <button className="sr-primary sr-big sr-sticky-button" disabled={busy || !adult || !terms || !monitoring}>{busy ? "만드는 중…" : "회원가입 끝내기"}<ChevronRight /></button>
+    <label className="sr-check"><input type="checkbox" checked={safety} onChange={(e) => setSafety(e.target.checked)} /><span><b>안전하고 예의 있게 대화하겠습니다.</b><small>전화번호·주소·계좌번호는 보내지 않고, 불편하면 바로 신고하거나 차단하겠습니다.</small></span></label>
+    <button className="sr-primary sr-big sr-sticky-button" disabled={busy || !adult || !terms || !safety}>{busy ? "만드는 중…" : "회원가입 끝내기"}<ChevronRight /></button>
   </form></section>;
 }
 
@@ -244,7 +244,7 @@ function MemberLogin({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit:
 
 function Home({ profile, matches, onMatch, onDiscover, onAi, onOpen, onLogout, busy }: { profile: Profile; matches: Match[]; onMatch: () => void; onDiscover: () => void; onAi: () => void; onOpen: (m: Match) => void; onLogout: () => void; busy: boolean }) {
   const conversations = matches.filter((match) => match.status !== "blocked");
-  return <section className="sr-page sr-home"><TopBar title="비밀친구" right={<button className="sr-icon-btn" onClick={onLogout} aria-label="나가기"><LogOut /></button>} />
+  return <section className="sr-page sr-home"><TopBar title="전국비밀채팅" right={<button className="sr-icon-btn" onClick={onLogout} aria-label="나가기"><LogOut /></button>} />
     <div className="sr-scroll"><div className="sr-profile-card"><Avatar id={profile.avatar_id} photoUrl={profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null} size="lg" /><div><small>내 공개 프로필</small><h2>{profile.nickname}</h2><span>{profile.gender} · {profile.age_band} · {profile.region} · {profile.job}</span></div></div>
       <div className="sr-home-title"><p>지금 누구와</p><h1>이야기할까요?</h1></div>
       <button className="sr-choice sr-choice-human" onClick={onMatch}><span><UserRoundSearch /></span><div><b>상대 고르기</b><small>조건을 고르고 5초 룰렛으로 연결</small></div><ChevronRight /></button>
@@ -311,7 +311,7 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
   return <section className="sr-page sr-chat"><header className="sr-chat-head"><div className="sr-chat-nav"><button className="sr-icon-btn" onClick={onBack}><ArrowLeft /></button><strong>비밀 대화</strong>{!admin && <button className="sr-more" onClick={() => setMenu(!menu)}>•••</button>}</div><div className="sr-chat-person"><Avatar id={match.persona.avatarId} photoUrl={match.persona.photoUrl} /><div><small>대화 상대</small><b>{match.persona.nickname}{match.kind === "ai" && <em>AI</em>}</b><span><i /> {match.persona.gender} · {match.persona.ageBand} · {match.persona.job}</span></div><button onClick={() => setShowIntro(!showIntro)}><Eye /> 자기소개</button></div>{myPerson && <div className="sr-chat-person mine"><Avatar id={myPerson.avatarId} photoUrl={myPerson.photoUrl} /><div><small>{admin ? "회원" : "나"}</small><b>{myPerson.nickname}</b><span>{myPerson.gender} · {myPerson.ageBand} · {myPerson.job}</span></div></div>}</header>
     {menu && <div className="sr-chat-menu"><p>불편한 대화인가요?</p><button onClick={async () => { try { await api(`/api/random/matches/${match.id}/report`, { method: "POST", body: JSON.stringify({ reason: "불쾌하거나 부적절한 대화" }) }); setNotice("신고가 접수되었습니다."); setMenu(false); } catch (e) { setNotice((e as Error).message); } }}><Flag /> 신고하기</button><button className="danger" onClick={async () => { if (!confirm("이 대화를 차단하고 끝낼까요?")) return; try { await api(`/api/random/matches/${match.id}/block`, { method: "POST" }); onBlocked?.(); } catch (e) { setNotice((e as Error).message); } }}><X /> 차단하고 끝내기</button></div>}
     {showIntro && <div className="sr-chat-intro"><b>{match.persona.nickname}님의 자기소개</b><p>{match.persona.introduction || "등록된 자기소개가 없습니다."}</p></div>}
-    <div className="sr-chat-info">{admin && match.mode === "managed" ? "테스트운영자 대행 · 회원에게 답장할 수 있습니다." : admin ? "모니터링 열람 · 직접 회원 간 대화에는 답장할 수 없습니다." : match.kind === "ai" ? "AI가 답하는 대화입니다. 대화 내용은 저장됩니다." : "대화는 이어보기와 신고·안전 대응을 위해 저장됩니다."}</div>
+    <div className="sr-chat-info">{admin && match.mode === "managed" ? "관리 프로필 대화 · 회원에게 답장할 수 있습니다." : admin ? "대화 기록 확인 · 직접 회원 간 대화에는 답장할 수 없습니다." : match.kind === "ai" ? "AI가 답하는 대화입니다. 개인정보를 보내지 마세요." : "전화번호·주소·계좌번호는 보내지 마세요. 불편하면 신고하거나 차단하세요."}</div>
     <div className="sr-messages"><div className="sr-day">오늘</div>{messages.length === 0 && <div className="sr-empty-chat"><MessageCircleHeart /><b>연결되었어요!</b><span>먼저 “안녕하세요”라고 보내 보세요.</span></div>}{messages.map((message) => {
       const mine = message.senderId === user.id; return <div className={`sr-message ${mine ? "mine" : "theirs"}`} key={message.id}>{!mine && <Avatar id={match.persona.avatarId} size="sm" />}<div>{!mine && <small>{message.author}</small>}<p>{message.text}</p><time>{new Date(message.createdAt).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" })}</time></div></div>;
     })}<div ref={endRef} /></div>
@@ -330,9 +330,9 @@ function AdminDashboard({ user, onLogout, setNotice }: { user: User; onLogout: (
   const load = useCallback(() => Promise.all([api<{ matches: Match[] }>("/api/random/admin/matches"), api<{ profiles: (Persona & { live?: boolean })[] }>("/api/random/admin/test-profiles")]).then(([m, p]) => { setMatches(m.matches); setTestProfiles(p.profiles); }).catch((e) => setNotice(e.message)).finally(() => setLoading(false)), [setNotice]);
   useEffect(() => { load(); const timer = setInterval(load, 5000); return () => clearInterval(timer); }, [load]);
   async function createProfile(event: FormEvent) { event.preventDefault(); try { await api("/api/random/admin/test-profiles", { method: "POST", body: JSON.stringify({ nickname, gender, ageBand, region, job, introduction, avatarId }) }); setNickname(""); setIntroduction(""); setShowCreate(false); await load(); setNotice("공개 데이트 프로필을 만들었습니다."); } catch (error) { setNotice((error as Error).message); } }
-  async function downloadExport() { try { const response = await fetch("/api/random/admin/export", { credentials: "include" }); if (!response.ok) throw new Error("대화 내보내기에 실패했습니다."); const blob = await response.blob(); const href = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = href; anchor.download = `theham-chat-export-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(href); } catch (error) { setNotice((error as Error).message); } }
+  async function downloadExport() { try { const response = await fetch("/api/random/admin/export", { credentials: "include" }); if (!response.ok) throw new Error("대화 내보내기에 실패했습니다."); const blob = await response.blob(); const href = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = href; anchor.download = `jeonguk-secret-chat-export-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(href); } catch (error) { setNotice((error as Error).message); } }
   if (selected) return <Chat match={selected} user={user} profile={null} admin onBack={() => { setSelected(null); load(); }} setNotice={setNotice} />;
-  return <section className="sr-page sr-admin"><TopBar title="마스터 설정" right={<button className="sr-icon-btn" onClick={onLogout}><LogOut /></button>} /><div className="sr-scroll"><div className="sr-admin-hero"><ShieldCheck /><div><b>테스트운영자 대행</b><span>관리 프로필 대화는 답장할 수 있고, 전체 대화는 모니터링·내보내기할 수 있습니다.</span></div></div>
+  return <section className="sr-page sr-admin"><TopBar title="전국비밀채팅 관리자" right={<button className="sr-icon-btn" onClick={onLogout}><LogOut /></button>} /><div className="sr-scroll"><div className="sr-admin-hero"><ShieldCheck /><div><b>관리 프로필 운영</b><span>관리 프로필 대화에는 답장할 수 있고, 필요한 대화 기록을 확인·내보낼 수 있습니다.</span></div></div>
     <div className="sr-admin-actions"><button onClick={() => setShowCreate(!showCreate)}><Plus /> 임의 회원 만들기</button><button onClick={downloadExport}><Download /> 전체 대화 저장</button></div>
     {showCreate && <form className="sr-admin-create sr-form" onSubmit={createProfile}><h3>공개 데이트 회원 만들기</h3><label>닉네임<input value={nickname} onChange={(e) => setNickname(e.target.value.slice(0, 10))} minLength={2} maxLength={10} required /></label><div className="sr-select-row"><label>성별<select value={gender} onChange={(e) => setGender(e.target.value)}>{["여성", "남성", "기타", "공개 안 함"].map((v) => <option key={v}>{v}</option>)}</select></label><label>나이<select value={ageBand} onChange={(e) => setAgeBand(e.target.value)}>{profileAges.map((v) => <option key={v}>{v}</option>)}</select></label></div><div className="sr-select-row"><label>지역<select value={region} onChange={(e) => setRegion(e.target.value)}>{profileRegions.map((v) => <option key={v}>{v}</option>)}</select></label><label>직업<select value={job} onChange={(e) => setJob(e.target.value)}>{profileJobs.map((v) => <option key={v}>{v}</option>)}</select></label></div><label>자기소개<textarea value={introduction} onChange={(e) => setIntroduction(e.target.value.slice(0, 240))} minLength={2} maxLength={240} required /></label><AvatarGrid value={avatarId} onChange={setAvatarId} /><button className="sr-primary sr-big">일반 회원처럼 공개하기</button></form>}
     <div className="sr-admin-section"><h3>내가 만든 공개 회원</h3>{testProfiles.length === 0 ? <p className="sr-list-empty">아직 만든 회원이 없습니다.</p> : <div className="sr-admin-profiles">{testProfiles.map((person) => <div key={person.userId}><Avatar id={person.avatarId} photoUrl={person.photoUrl} /><p><b>{person.nickname}</b><span>{person.gender} · {person.ageBand} · {person.job}</span></p><em className={person.live ? "live" : ""}>● {person.live ? "LIVE" : "대기"}</em></div>)}</div>}</div>

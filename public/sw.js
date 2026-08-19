@@ -1,4 +1,4 @@
-const CACHE = "secret-friend-shell-v7-dating-profiles";
+const CACHE = "national-secret-chat-shell-v8-rebrand";
 const SHELL = ["/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {

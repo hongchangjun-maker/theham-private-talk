@@ -7,7 +7,7 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
     readFile(new URL("../components/SecretRouletteApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(component, /비밀친구/);
+  assert.match(component, /전국비밀채팅/);
   assert.match(component, /phoneNumber/);
   assert.match(component, /전화번호 전체/);
   assert.match(component, /전화번호 끝 4자리/);
@@ -20,9 +20,10 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.match(component, /루미 AI와 대화/);
   assert.match(component, /공개 데이트 채팅/);
   assert.match(component, /간단한 자기소개/);
-  assert.match(component, /대화 저장과 운영 열람 안내/);
+  assert.match(component, /안전하고 예의 있게 대화하겠습니다/);
+  assert.match(component, /전화번호·주소·계좌번호는 보내지 마세요/);
   assert.match(component, /전체 대화 저장/);
-  assert.doesNotMatch(component, /테스트 운영자 대행/);
+  assert.doesNotMatch(component, /테스트\s*운영자 대행|모니터링|감시/);
   assert.match(component, /신고하기/);
   assert.match(component, /차단하고 끝내기/);
   assert.match(layout, /lang="ko"/);
@@ -54,9 +55,10 @@ test("PWA manifest and service worker use the new product branding", async () =>
     readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
   ]);
   const parsed = JSON.parse(manifest);
-  assert.equal(parsed.name, "THEHAM 비밀친구");
+  assert.equal(parsed.name, "전국비밀채팅");
+  assert.equal(parsed.short_name, "전국비밀채팅");
   assert.equal(parsed.display, "standalone");
-  assert.match(sw, /secret-friend-shell-v7-dating-profiles/);
+  assert.match(sw, /national-secret-chat-shell-v8-rebrand/);
   assert.match(sw, /pathname\.startsWith\("\/api\/"\)/);
 });
 

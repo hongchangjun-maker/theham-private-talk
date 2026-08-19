@@ -67,7 +67,7 @@ export function PrivateTalkApp() {
   const [demoMode, setDemoMode] = useState(false);
   const [loginMode, setLoginMode] = useState<LoginMode>("home");
   const [view, setView] = useState<View>("dashboard");
-  const [brandName, setBrandName] = useState("THEHAM PRIVATE TALK");
+  const [brandName, setBrandName] = useState("전국비밀채팅");
   const [activeRoom, setActiveRoom] = useState("design");
   const [mobileRoomOpen, setMobileRoomOpen] = useState(false);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -343,7 +343,7 @@ export function PrivateTalkApp() {
     showToast(demoMode ? "데모 일정에 회의를 추가했습니다." : "회의를 예약했습니다.");
   }
 
-  if (!ready) return <div className="loading-screen"><div className="loading-mark"><div className="loading-dot" />PRIVATE TALK</div></div>;
+  if (!ready) return <div className="loading-screen"><div className="loading-mark"><div className="loading-dot" />전국비밀채팅</div></div>;
   if (!signedIn) return <LoginScreen mode={loginMode} setMode={setLoginMode} onMasterAccess={handleMasterAccess} onInviteJoin={handleInviteJoin} configured={integration.auth} brand={brandName} toast={toast} />;
   if (!demoMode && currentUser) {
     const isAdmin = currentUser.role === "admin" || currentUser.role === "super_admin";
@@ -423,7 +423,7 @@ export function PrivateTalkApp() {
           {view === "notifications" && <NotificationsView demo={demoMode} showToast={showToast} />}
           {view === "files" && <FilesView storage={integration.storage} roomId={activeRoom} demo={demoMode} showToast={showToast} />}
           {view === "settings" && <SettingsView install={installApp} notificationsEnabled={notificationsEnabled} enableNotifications={enableNotifications} showToast={showToast} />}
-          {view === "admin" && <AdminView tab={settingsTab} setTab={setSettingsTab} brand={brandName} saveBrand={(name) => { setBrandName(name || "THEHAM PRIVATE TALK"); showToast("브랜드 설정을 현재 세션에 적용했습니다."); }} integration={integration} demo={demoMode} rooms={rooms} onRoomCreated={(room) => { setRooms((current) => [...current, room]); setActiveRoom(room.id); }} showToast={showToast} />}
+          {view === "admin" && <AdminView tab={settingsTab} setTab={setSettingsTab} brand={brandName} saveBrand={(name) => { setBrandName(name || "전국비밀채팅"); showToast("브랜드 설정을 현재 세션에 적용했습니다."); }} integration={integration} demo={demoMode} rooms={rooms} onRoomCreated={(room) => { setRooms((current) => [...current, room]); setActiveRoom(room.id); }} showToast={showToast} />}
         </div>
       </main>
 
@@ -507,7 +507,7 @@ function EasyAdminConsole({ rooms, onRoomCreated, openRoom, logout, toast, showT
   return (
     <div className="easy-page">
       <header className="easy-topbar">
-        <Brand name="THEHAM PRIVATE TALK" />
+        <Brand name="전국비밀채팅" />
         <button className="easy-exit" onClick={logout}><LogOut size={18} />나가기</button>
       </header>
       <main className="easy-admin-main">

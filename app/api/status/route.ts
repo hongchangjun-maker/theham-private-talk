@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   return Response.json(
     {
-      service: "THEHAM PRIVATE TALK",
+      service: "전국비밀채팅",
       ok: false,
       backend: "cloudflare",
       integrations: {
