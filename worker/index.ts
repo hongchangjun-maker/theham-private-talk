@@ -305,9 +305,9 @@ function cleanText(value: unknown, max: number): string {
 }
 
 function assertNickname(value: unknown): string {
-  const nickname = cleanText(value, 12);
-  if (!/^[가-힣A-Za-z0-9_]{2,12}$/.test(nickname)) {
-    throw new HttpError(400, "닉네임은 한글·영문·숫자로 2~12자 입력해 주세요.");
+  const nickname = cleanText(value, 10);
+  if (!/^[가-힣A-Za-z0-9_]{2,10}$/.test(nickname)) {
+    throw new HttpError(400, "닉네임은 한글·영문·숫자로 2~10자 입력해 주세요.");
   }
   return nickname;
 }

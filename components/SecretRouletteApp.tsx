@@ -175,7 +175,7 @@ function Signup({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (dat
     <div className="sr-step-title"><span>1</span><div><strong>내 정보를 적어 주세요</strong><p>다른 사람에게는 닉네임만 보여요.</p></div></div>
     <label>이름<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={40} required /></label>
     <label>전화번호<input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))} inputMode="numeric" autoComplete="tel" pattern="\d{10,11}" minLength={10} maxLength={11} required /><small>전화번호 전체를 숫자로 입력해 주세요. 로그인할 때는 끝 4자리만 사용합니다.</small></label>
-    <label>채팅 닉네임<input value={nickname} onChange={(e) => setNickname(e.target.value.replace(/[^가-힣A-Za-z0-9_]/g, "").slice(0, 12))} minLength={2} required /></label>
+    <label>채팅 닉네임<input value={nickname} onChange={(e) => setNickname(e.target.value.slice(0, 10))} minLength={2} maxLength={10} required /><small>한글·영문·숫자로 2~10글자까지 입력할 수 있어요.</small></label>
     <div className="sr-step-title"><span>2</span><div><strong>내 아바타를 골라 주세요</strong><p>사진을 누르면 선택돼요.</p></div></div>
     <AvatarGrid value={avatarId} onChange={setAvatarId} />
     <div className="sr-step-title"><span>3</span><div><strong>안전 약속을 확인해 주세요</strong></div></div>
