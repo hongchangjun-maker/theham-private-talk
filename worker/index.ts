@@ -11,6 +11,7 @@ type AppEnv = Env & {
   MASTER_PIN?: string;
   REALTIMEKIT_API_KEY?: string;
   REALTIMEKIT_ORG_ID?: string;
+  PHONE_HASH_PEPPER?: string;
   AI?: {
     run(model: string, input: Record<string, unknown>): Promise<unknown>;
   };
@@ -317,6 +318,25 @@ function assertPhoneLast4(value: unknown): string {
   return phoneLast4;
 }
 
+function assertPhoneNumber(value: unknown): string {
+  const phoneNumber = String(value ?? "").replace(/\D/g, "");
+  if (!/^\d{10,11}$/.test(phoneNumber)) {
+    throw new HttpError(400, "전화번호 전체를 숫자 10~11자리로 입력해 주세요.");
+  }
+  return phoneNumber;
+}
+
+function identityName(value: unknown): string {
+  const name = cleanText(value, 40).replace(/\s+/g, " ");
+  if (name.length < 2) throw new HttpError(400, "가입할 때 입력한 이름을 적어 주세요.");
+  return name;
+}
+
+async function protectedIdentityHash(env: AppEnv, purpose: "phone" | "login", value: string): Promise<string> {
+  if (!env.PHONE_HASH_PEPPER) throw new HttpError(503, "전화번호 보호 설정이 준비되지 않았습니다.");
+  return sha256(`${env.PHONE_HASH_PEPPER}:${purpose}:${value}`);
+}
+
 function assertAvatar(value: unknown): string {
   const avatarId = String(value ?? "");
   if (!AVATAR_IDS.has(avatarId)) throw new HttpError(400, "아바타를 하나 선택해 주세요.");
@@ -512,6 +532,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
         chat: database && Boolean(env.CHAT_ROOMS),
         storage: Boolean(env.FILES),
         ai: Boolean(env.AI),
+        phoneProtection: Boolean(env.PHONE_HASH_PEPPER),
         video: Boolean(env.REALTIMEKIT_API_KEY && env.REALTIMEKIT_ORG_ID),
         webPush: false,
       },
@@ -558,20 +579,27 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
 
   if (url.pathname === "/api/random/signup" && request.method === "POST") {
     const body = await readJsonBody<{
-      name?: unknown; phoneLast4?: unknown; nickname?: unknown; avatarId?: unknown;
+      name?: unknown; phoneNumber?: unknown; nickname?: unknown; avatarId?: unknown;
       adultAccepted?: unknown; termsAccepted?: unknown;
     }>(request);
-    const name = cleanText(body.name, 40);
-    if (name.length < 2) throw new HttpError(400, "이름을 2자 이상 입력해 주세요.");
-    const phoneLast4 = assertPhoneLast4(body.phoneLast4);
+    const name = identityName(body.name);
+    const phoneNumber = assertPhoneNumber(body.phoneNumber);
+    const phoneLast4 = phoneNumber.slice(-4);
     const nickname = assertNickname(body.nickname);
     const avatarId = assertAvatar(body.avatarId);
     if (body.adultAccepted !== true || body.termsAccepted !== true) {
       throw new HttpError(400, "만 19세 이상 확인과 이용규칙 동의가 필요합니다.");
     }
-    const existing = await env.DB.prepare("SELECT user_id FROM chat_profiles WHERE nickname = ? COLLATE NOCASE")
-      .bind(nickname).first();
-    if (existing) throw new HttpError(409, "이미 사용 중인 닉네임입니다.");
+    const phoneNumberHash = await protectedIdentityHash(env, "phone", phoneNumber);
+    const loginKeyHash = await protectedIdentityHash(env, "login", `${name.toLowerCase()}:${phoneLast4}`);
+    const existing = await env.DB.prepare(`
+      SELECT user_id, nickname, phone_number_hash, login_key_hash FROM chat_profiles
+      WHERE nickname = ? COLLATE NOCASE OR phone_number_hash = ? OR login_key_hash = ? LIMIT 1
+    `).bind(nickname, phoneNumberHash, loginKeyHash).first<{
+      user_id: string; nickname: string; phone_number_hash: string | null; login_key_hash: string | null;
+    }>();
+    if (existing?.nickname.toLowerCase() === nickname.toLowerCase()) throw new HttpError(409, "이미 사용 중인 닉네임입니다.");
+    if (existing) throw new HttpError(409, "이미 가입된 전화번호 또는 같은 로그인 정보가 있습니다.");
     const userId = crypto.randomUUID();
     const now = new Date().toISOString();
     const passwordData = await hashPassword(phoneLast4);
@@ -586,10 +614,11 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       env.DB.prepare(`
         INSERT INTO chat_profiles (
           user_id, nickname, phone_last4_hash, phone_last4_salt, phone_last4_iterations,
-          avatar_id, adult_confirmed_at, terms_accepted_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          avatar_id, adult_confirmed_at, terms_accepted_at, created_at, updated_at,
+          phone_number_hash, login_key_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(userId, nickname, passwordData.hash, passwordData.salt, passwordData.iterations,
-        avatarId, now, now, now, now),
+        avatarId, now, now, now, now, phoneNumberHash, loginKeyHash),
     ]);
     const token = await createSession(env, request, userId);
     await audit(env, request, userId, "random.signup", "user", userId, { avatarId });
@@ -600,29 +629,51 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
   }
 
   if (url.pathname === "/api/random/login" && request.method === "POST") {
-    const body = await readJsonBody<{ nickname?: unknown; phoneLast4?: unknown }>(request);
-    const nickname = assertNickname(body.nickname);
+    const body = await readJsonBody<{ name?: unknown; phoneLast4?: unknown }>(request);
+    const name = identityName(body.name);
     const phoneLast4 = assertPhoneLast4(body.phoneLast4);
-    const keyHash = await sha256(`${requestIp(request)}:random:${nickname.toLowerCase()}`);
+    const keyHash = await sha256(`${requestIp(request)}:random:${name.toLowerCase()}`);
     const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
     const attempts = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM auth_attempts WHERE key_hash = ? AND attempted_at > ? AND success = 0",
     ).bind(keyHash, windowStart).first<{ count: number }>();
     if ((attempts?.count ?? 0) >= 5) throw new HttpError(429, "입력 횟수를 초과했습니다. 15분 후 다시 시도해 주세요.");
-    const row = await env.DB.prepare(`
+    const loginKeyHash = await protectedIdentityHash(env, "login", `${name.toLowerCase()}:${phoneLast4}`);
+    let row = await env.DB.prepare(`
       SELECT u.id, u.email, u.display_name, u.organization, u.role, u.status,
         p.nickname, p.avatar_id, p.phone_last4_hash, p.phone_last4_salt, p.phone_last4_iterations
       FROM chat_profiles p JOIN users u ON u.id = p.user_id
-      WHERE p.nickname = ? COLLATE NOCASE
-    `).bind(nickname).first<AppUser & ChatProfile & {
+      WHERE p.login_key_hash = ?
+    `).bind(loginKeyHash).first<AppUser & ChatProfile & {
       phone_last4_hash: string; phone_last4_salt: string; phone_last4_iterations: number;
     }>();
+    if (!row) {
+      const legacy = await env.DB.prepare(`
+        SELECT u.id, u.email, u.display_name, u.organization, u.role, u.status,
+          p.nickname, p.avatar_id, p.phone_last4_hash, p.phone_last4_salt, p.phone_last4_iterations
+        FROM chat_profiles p JOIN users u ON u.id = p.user_id
+        WHERE u.display_name = ? AND u.status = 'active' AND p.login_key_hash IS NULL
+      `).bind(name).all<AppUser & ChatProfile & {
+        phone_last4_hash: string; phone_last4_salt: string; phone_last4_iterations: number;
+      }>();
+      const validLegacy = [];
+      for (const candidate of legacy.results) {
+        if (await verifyPassword(phoneLast4, candidate.phone_last4_hash, candidate.phone_last4_salt, candidate.phone_last4_iterations)) {
+          validLegacy.push(candidate);
+        }
+      }
+      if (validLegacy.length === 1) {
+        row = validLegacy[0];
+        await env.DB.prepare("UPDATE chat_profiles SET login_key_hash = ?, updated_at = ? WHERE user_id = ?")
+          .bind(loginKeyHash, new Date().toISOString(), row.id).run();
+      }
+    }
     const valid = Boolean(row) && row!.status === "active" && await verifyPassword(
       phoneLast4, row!.phone_last4_hash, row!.phone_last4_salt, row!.phone_last4_iterations,
     );
     await env.DB.prepare("INSERT INTO auth_attempts (key_hash, attempted_at, success) VALUES (?, ?, ?)")
       .bind(keyHash, new Date().toISOString(), valid ? 1 : 0).run();
-    if (!valid) throw new HttpError(401, "닉네임 또는 전화번호 끝 4자리가 맞지 않습니다.");
+    if (!valid) throw new HttpError(401, "이름 또는 전화번호 끝 4자리가 맞지 않습니다.");
     const token = await createSession(env, request, row!.id);
     return json({
       user: { id: row!.id, display_name: row!.display_name, role: row!.role, status: row!.status },

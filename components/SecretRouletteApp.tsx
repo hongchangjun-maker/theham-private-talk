@@ -113,10 +113,10 @@ export function SecretRouletteApp() {
               setUser(data.user); setProfile(data.profile); setMatches([]); setScreen("home");
             } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
           }} />}
-          {screen === "login" && <MemberLogin busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (nickname, phoneLast4) => {
+          {screen === "login" && <MemberLogin busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (name, phoneLast4) => {
             setBusy(true); setNotice("");
             try {
-              const data = await api<{ user: User; profile: Profile }>("/api/random/login", { method: "POST", body: JSON.stringify({ nickname, phoneLast4 }) });
+              const data = await api<{ user: User; profile: Profile }>("/api/random/login", { method: "POST", body: JSON.stringify({ name, phoneLast4 }) });
               setUser(data.user); setProfile(data.profile); await loadMatches(); setScreen("home");
             } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
           }} />}
@@ -170,12 +170,12 @@ function Welcome({ onSignup, onLogin, onAdmin }: { onSignup: () => void; onLogin
 function Signup({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (data: Record<string, unknown>) => void; busy: boolean }) {
   const [name, setName] = useState(""); const [phone, setPhone] = useState(""); const [nickname, setNickname] = useState("");
   const [avatarId, setAvatarId] = useState(""); const [adult, setAdult] = useState(false); const [terms, setTerms] = useState(false);
-  function submit(event: FormEvent) { event.preventDefault(); onSubmit({ name, phoneLast4: phone, nickname, avatarId, adultAccepted: adult, termsAccepted: terms }); }
+  function submit(event: FormEvent) { event.preventDefault(); onSubmit({ name, phoneNumber: phone, nickname, avatarId, adultAccepted: adult, termsAccepted: terms }); }
   return <section className="sr-page"><TopBar title="3분 회원가입" onBack={onBack} /><form className="sr-scroll sr-form" onSubmit={submit}>
     <div className="sr-step-title"><span>1</span><div><strong>내 정보를 적어 주세요</strong><p>다른 사람에게는 닉네임만 보여요.</p></div></div>
-    <label>이름<input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 홍길동" maxLength={40} required /></label>
-    <label>전화번호 끝 4자리<input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="예: 6085" inputMode="numeric" pattern="\d{4}" required /><small>다시 들어올 때 쓰므로 꼭 기억해 주세요.</small></label>
-    <label>채팅 닉네임<input value={nickname} onChange={(e) => setNickname(e.target.value.replace(/[^가-힣A-Za-z0-9_]/g, "").slice(0, 12))} placeholder="예: 봄바람" minLength={2} required /></label>
+    <label>이름<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={40} required /></label>
+    <label>전화번호<input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))} inputMode="numeric" autoComplete="tel" pattern="\d{10,11}" minLength={10} maxLength={11} required /><small>전화번호 전체를 숫자로 입력해 주세요. 로그인할 때는 끝 4자리만 사용합니다.</small></label>
+    <label>채팅 닉네임<input value={nickname} onChange={(e) => setNickname(e.target.value.replace(/[^가-힣A-Za-z0-9_]/g, "").slice(0, 12))} minLength={2} required /></label>
     <div className="sr-step-title"><span>2</span><div><strong>내 아바타를 골라 주세요</strong><p>사진을 누르면 선택돼요.</p></div></div>
     <AvatarGrid value={avatarId} onChange={setAvatarId} />
     <div className="sr-step-title"><span>3</span><div><strong>안전 약속을 확인해 주세요</strong></div></div>
@@ -192,12 +192,12 @@ function AvatarGrid({ value, onChange, filter }: { value: string; onChange: (id:
   </button>)}</div>;
 }
 
-function MemberLogin({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (nickname: string, phone: string) => void; busy: boolean }) {
-  const [nickname, setNickname] = useState(""); const [phone, setPhone] = useState("");
-  return <section className="sr-page"><TopBar title="다시 들어오기" onBack={onBack} /><form className="sr-auth-card" onSubmit={(e) => { e.preventDefault(); onSubmit(nickname, phone); }}>
-    <div className="sr-round-icon"><CircleUserRound /></div><h2>가입할 때 쓴 내용을 적으세요</h2><p>닉네임과 전화번호 끝 4자리만 있으면 돼요.</p>
-    <label>닉네임<input value={nickname} onChange={(e) => setNickname(e.target.value)} placeholder="예: 봄바람" required /></label>
-    <label>전화번호 끝 4자리<input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" placeholder="숫자 4자리" pattern="\d{4}" required /></label>
+function MemberLogin({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (name: string, phone: string) => void; busy: boolean }) {
+  const [name, setName] = useState(""); const [phone, setPhone] = useState("");
+  return <section className="sr-page"><TopBar title="다시 들어오기" onBack={onBack} /><form className="sr-auth-card" onSubmit={(e) => { e.preventDefault(); onSubmit(name, phone); }}>
+    <div className="sr-round-icon"><CircleUserRound /></div><h2>가입할 때 쓴 내용을 적으세요</h2><p>이름과 전화번호 끝 4자리만 있으면 돼요.</p>
+    <label>이름<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={40} required /></label>
+    <label>전화번호 끝 4자리<input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" autoComplete="tel" pattern="\d{4}" required /></label>
     <button className="sr-primary sr-big" disabled={busy}>{busy ? "확인 중…" : "내 채팅으로 들어가기"}</button>
   </form></section>;
 }
