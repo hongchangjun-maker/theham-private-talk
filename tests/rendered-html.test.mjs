@@ -31,6 +31,9 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.match(component, /역할로 바로 대화합니다/);
   assert.match(component, /내가 맡은 공개회원/);
   assert.match(component, /현재 .* 역할로 답장합니다/);
+  assert.match(component, /setInterval\(\(\) => \{ void syncHistory\(false\); \}, 1500\)/);
+  assert.match(component, /LIVE를 종료했습니다/);
+  assert.match(component, /불필요한 LIVE 대화방을 삭제했습니다/);
   assert.doesNotMatch(component, /테스트\s*운영자 대행|모니터링|감시/);
   assert.match(component, /신고하기/);
   assert.match(component, /차단하고 끝내기/);
@@ -60,6 +63,9 @@ test("Worker owns signup, random matching, realtime chat, AI, and moderation rou
   assert.match(source, /\{2,10\}/);
   assert.match(source, /hostname\.endsWith\("\.chatgpt\.site"\)/);
   assert.match(source, /class ChatRoom extends DurableObject/);
+  assert.match(source, /managed_chat\.ended/);
+  assert.match(source, /managed_chat\.deleted/);
+  assert.match(source, /종료된 대화방에는 메시지를 보낼 수 없습니다/);
   assert.match(source, /userId: row\.target_user_id/);
   assert.match(source, /HttpOnly; Secure; SameSite=Lax/);
 });

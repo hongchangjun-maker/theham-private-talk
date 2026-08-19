@@ -211,6 +211,13 @@ export class ChatRoom extends DurableObject<AppEnv> {
       return json({ ok: true });
     }
 
+    if (request.method === "DELETE" && url.pathname === "/all") {
+      this.ctx.storage.sql.exec("DELETE FROM messages");
+      this.broadcast({ type: "room-deleted" });
+      for (const socket of this.ctx.getWebSockets()) socket.close(1000, "room deleted");
+      return json({ ok: true });
+    }
+
     if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
@@ -1383,6 +1390,42 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     return json({ profile: publicProfile((await chatProfile(env, userId))!) }, 201);
   }
 
+  const adminEndMatch = url.pathname.match(/^\/api\/random\/admin\/matches\/([^/]+)\/end$/);
+  if (adminEndMatch && request.method === "POST") {
+    requireAdmin(user);
+    const matchId = adminEndMatch[1];
+    const match = await env.DB.prepare(`
+      SELECT id, room_id, status FROM random_matches
+      WHERE id = ? AND operator_id = ? AND kind = 'operator' AND mode = 'managed'
+    `).bind(matchId, user.id).first<{ id: string; room_id: string; status: string }>();
+    if (!match) throw new HttpError(404, "관리 중인 대화방을 찾을 수 없습니다.");
+    if (match.status !== "live") throw new HttpError(409, "이미 종료된 대화입니다.");
+    const endedAt = new Date().toISOString();
+    await env.DB.prepare("UPDATE random_matches SET status = 'ended', ended_at = ? WHERE id = ? AND status = 'live'")
+      .bind(endedAt, match.id).run();
+    await audit(env, request, user.id, "managed_chat.ended", "match", match.id, { roomId: match.room_id });
+    return json({ ok: true, endedAt });
+  }
+
+  const adminDeleteMatch = url.pathname.match(/^\/api\/random\/admin\/matches\/([^/]+)$/);
+  if (adminDeleteMatch && request.method === "DELETE") {
+    requireAdmin(user);
+    const matchId = adminDeleteMatch[1];
+    const match = await env.DB.prepare(`
+      SELECT id, room_id FROM random_matches
+      WHERE id = ? AND operator_id = ? AND kind = 'operator' AND mode = 'managed'
+    `).bind(matchId, user.id).first<{ id: string; room_id: string }>();
+    if (!match) throw new HttpError(404, "삭제할 관리 대화방을 찾을 수 없습니다.");
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM chat_reports WHERE match_id = ?").bind(match.id),
+      env.DB.prepare("DELETE FROM random_matches WHERE id = ?").bind(match.id),
+      env.DB.prepare("DELETE FROM rooms WHERE id = ?").bind(match.room_id),
+    ]);
+    await roomStub(env, match.room_id).fetch(new Request(`${url.origin}/all`, { method: "DELETE" }));
+    await audit(env, request, user.id, "managed_chat.deleted", "match", match.id, { roomId: match.room_id });
+    return json({ ok: true });
+  }
+
   if (url.pathname === "/api/random/admin/export" && request.method === "GET") {
     requireAdmin(user);
     const requestedMatchId = url.searchParams.get("matchId");
@@ -1471,6 +1514,9 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const body = await readJsonBody<{ text?: unknown }>(request);
     const text = String(body.text ?? "").trim();
     if (!text || text.length > 4_000) throw new HttpError(400, "메시지는 1자 이상 4,000자 이하로 입력해 주세요.");
+    const randomMatch = await env.DB.prepare("SELECT status FROM random_matches WHERE room_id = ? LIMIT 1")
+      .bind(roomId).first<{ status: string }>();
+    if (randomMatch && randomMatch.status !== "live") throw new HttpError(409, "종료된 대화방에는 메시지를 보낼 수 없습니다.");
     if (isUnsafeChat(text)) throw new HttpError(400, "안전 규칙에 어긋나는 내용은 보낼 수 없습니다.");
     const profile = await chatProfile(env, user.id);
     const message: MessageRecord = {

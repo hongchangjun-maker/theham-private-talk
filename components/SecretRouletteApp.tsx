@@ -333,11 +333,29 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
   const [messages, setMessages] = useState<Message[]>([]); const [text, setText] = useState(""); const [sending, setSending] = useState(false); const [menu, setMenu] = useState(false); const [showIntro, setShowIntro] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    let socket: WebSocket | null = null; let cancelled = false;
+    let socket: WebSocket | null = null; let cancelled = false; let syncing = false;
     const roomPath = encodeURIComponent(match.roomId);
-    api<{ messages: Message[] }>(`/api/cloudflare/rooms/${roomPath}/messages?limit=120`)
-      .then((data) => { if (!cancelled) setMessages(Array.isArray(data.messages) ? data.messages.map(normalizeMessage).filter((item): item is Message => Boolean(item)) : []); })
-      .catch((e) => setNotice(e.message));
+    const syncHistory = async (showError = false) => {
+      if (cancelled || syncing) return;
+      syncing = true;
+      try {
+        const data = await api<{ messages: Message[] }>(`/api/cloudflare/rooms/${roomPath}/messages?limit=120`);
+        if (cancelled) return;
+        const next = Array.isArray(data.messages) ? data.messages.map(normalizeMessage).filter((item): item is Message => Boolean(item)) : [];
+        setMessages((current) => {
+          const unchanged = current.length === next.length && current.every((item, index) => item.id === next[index]?.id && item.text === next[index]?.text);
+          return unchanged ? current : next;
+        });
+      } catch (error) {
+        if (showError && !cancelled) setNotice((error as Error).message);
+      } finally {
+        syncing = false;
+      }
+    };
+    void syncHistory(true);
+    const poll = window.setInterval(() => { void syncHistory(false); }, 1500);
+    const syncWhenVisible = () => { if (document.visibilityState === "visible") void syncHistory(false); };
+    document.addEventListener("visibilitychange", syncWhenVisible);
     try {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(`${protocol}//${location.host}/api/cloudflare/rooms/${roomPath}/socket`);
@@ -354,7 +372,7 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
     } catch {
       // Message history and HTTP sending still work when realtime connection is unavailable.
     }
-    return () => { cancelled = true; socket?.close(); };
+    return () => { cancelled = true; window.clearInterval(poll); document.removeEventListener("visibilitychange", syncWhenVisible); socket?.close(); };
   }, [match.roomId, setNotice]);
   useEffect(() => {
     const list = messagesRef.current;
@@ -381,7 +399,7 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
   const managedAdminChat = admin && match.mode === "managed";
   const otherPerson = managedAdminChat ? match.requester ?? match.persona : match.persona;
   const myPerson = managedAdminChat ? match.persona : admin ? match.requester : profile ? { nickname: profile.nickname, gender: profile.gender, ageBand: profile.age_band, region: profile.region, job: profile.job, avatarId: profile.avatar_id, photoUrl: profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null } : null;
-  const canReply = !admin || (match.mode === "managed" && match.status === "live");
+  const canReply = match.status === "live" && (!admin || match.mode === "managed");
   return <section className="sr-page sr-chat"><header className="sr-chat-head"><div className="sr-chat-nav"><button className="sr-icon-btn" onClick={onBack}><ArrowLeft /></button><strong>{managedAdminChat ? `${match.persona.nickname} 역할 대화` : "비밀 대화"}</strong>{!admin && <button className="sr-more" onClick={() => setMenu(!menu)}>•••</button>}</div><div className="sr-chat-person"><Avatar id={otherPerson.avatarId} photoUrl={otherPerson.photoUrl} /><div><small>{managedAdminChat ? "실제 회원" : "대화 상대"}</small><b>{otherPerson.nickname}{match.kind === "ai" && <em>AI</em>}</b><span><i /> {otherPerson.gender} · {otherPerson.ageBand} · {otherPerson.job}</span></div><button onClick={() => setShowIntro(!showIntro)}><Eye /> 자기소개</button></div>{myPerson && <div className="sr-chat-person mine"><Avatar id={myPerson.avatarId} photoUrl={myPerson.photoUrl} /><div><small>{managedAdminChat ? "내가 맡은 공개회원" : admin ? "회원" : "나"}</small><b>{myPerson.nickname}</b><span>{myPerson.gender} · {myPerson.ageBand} · {myPerson.job}</span></div></div>}</header>
     {menu && <div className="sr-chat-menu"><p>불편한 대화인가요?</p><button onClick={async () => { try { await api(`/api/random/matches/${match.id}/report`, { method: "POST", body: JSON.stringify({ reason: "불쾌하거나 부적절한 대화" }) }); setNotice("신고가 접수되었습니다."); setMenu(false); } catch (e) { setNotice((e as Error).message); } }}><Flag /> 신고하기</button><button className="danger" onClick={async () => { if (!confirm("이 대화를 차단하고 끝낼까요?")) return; try { await api(`/api/random/matches/${match.id}/block`, { method: "POST" }); onBlocked?.(); } catch (e) { setNotice((e as Error).message); } }}><X /> 차단하고 끝내기</button></div>}
     {showIntro && <div className="sr-chat-intro"><b>{otherPerson.nickname}님의 자기소개</b><p>{otherPerson.introduction || "등록된 자기소개가 없습니다."}</p></div>}
@@ -410,6 +428,8 @@ function AdminDashboard({ user, onLogout, setNotice }: { user: User; onLogout: (
   useEffect(() => { load(); const timer = setInterval(load, 5000); return () => clearInterval(timer); }, [load]);
   async function createProfile(event: FormEvent) { event.preventDefault(); try { await api("/api/random/admin/test-profiles", { method: "POST", body: JSON.stringify({ nickname, gender, ageBand, region, job, introduction, avatarId }) }); setNickname(""); setIntroduction(""); setShowCreate(false); await load(); setNotice("공개 데이트 프로필을 만들었습니다."); } catch (error) { setNotice((error as Error).message); } }
   async function downloadExport() { try { const response = await fetch("/api/random/admin/export", { credentials: "include" }); if (!response.ok) throw new Error("대화 내보내기에 실패했습니다."); const blob = await response.blob(); const href = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = href; anchor.download = `jeonguk-secret-chat-export-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(href); } catch (error) { setNotice((error as Error).message); } }
+  async function endLiveMatch(match: Match) { if (!confirm(`${match.requester?.nickname ?? "회원"}님의 LIVE를 종료할까요?\n대화 기록은 저장된 전체 대화에 남습니다.`)) return; try { await api(`/api/random/admin/matches/${encodeURIComponent(match.id)}/end`, { method: "POST" }); await load(); setNotice("LIVE를 종료했습니다. 대화 기록은 보관됩니다."); } catch (error) { setNotice((error as Error).message); } }
+  async function deleteLiveMatch(match: Match) { if (!confirm(`${match.requester?.nickname ?? "회원"}님의 이 대화방을 완전히 삭제할까요?\n삭제한 대화 내용은 되돌릴 수 없습니다.`)) return; try { await api(`/api/random/admin/matches/${encodeURIComponent(match.id)}`, { method: "DELETE" }); await load(); setNotice("불필요한 LIVE 대화방을 삭제했습니다."); } catch (error) { setNotice((error as Error).message); } }
   const managedLiveMatches = matches.filter((match) => match.mode === "managed" && match.status === "live");
   const otherMatches = matches.filter((match) => match.mode !== "managed" || match.status !== "live");
   const liveMatchesFor = (person: Persona) => managedLiveMatches.filter((match) => match.persona.userId === person.userId || (!match.persona.userId && match.persona.nickname === person.nickname));
@@ -422,9 +442,9 @@ function AdminDashboard({ user, onLogout, setNotice }: { user: User; onLogout: (
     <section className="sr-live-desk"><div className="sr-live-desk-head"><div><small>내가 만든 공개회원 대기실</small><b><i /> LIVE {managedLiveMatches.length}</b></div><button onClick={load}>새로고침</button></div><p className="sr-live-help">실제 회원이 공개회원을 선택하면 불이 켜집니다. 불이 켜진 대화방을 누르면 해당 공개회원 역할로 바로 대화합니다.</p>
       {loading ? <p className="sr-list-empty">불러오는 중…</p> : testProfiles.length === 0 ? <p className="sr-list-empty">먼저 ‘임의 회원 만들기’로 공개회원을 만들어 주세요.</p> : <div className="sr-live-roster">{testProfiles.map((person) => {
         const rooms = liveMatchesFor(person);
-        return <article className={rooms.length > 0 ? "is-live" : ""} key={person.userId}><div className="sr-live-profile"><span className="sr-live-avatar"><Avatar id={person.avatarId} photoUrl={person.photoUrl} /><i /></span><div><b>{person.nickname}</b><span>{person.gender} · {person.ageBand} · {person.job}</span></div><em>{rooms.length > 0 ? `LIVE ${rooms.length}` : "대기중"}</em></div>{rooms.length > 0 ? <div className="sr-live-rooms">{rooms.map((room) => <button key={room.id} onClick={() => setSelected(room)}><Avatar id={room.requester?.avatarId} photoUrl={room.requester?.photoUrl} size="sm" /><span><b>{room.requester?.nickname ?? "실제 회원"}님 대화방</b><small>{person.nickname} 역할로 입장</small></span><strong>● LIVE</strong><ChevronRight /></button>)}</div> : <p className="sr-live-wait">새로운 회원의 연결을 기다리고 있습니다.</p>}</article>;
+        return <article className={rooms.length > 0 ? "is-live" : ""} key={person.userId}><div className="sr-live-profile"><span className="sr-live-avatar"><Avatar id={person.avatarId} photoUrl={person.photoUrl} /><i /></span><div><b>{person.nickname}</b><span>{person.gender} · {person.ageBand} · {person.job}</span></div><em>{rooms.length > 0 ? `LIVE ${rooms.length}` : "대기중"}</em></div>{rooms.length > 0 ? <div className="sr-live-rooms">{rooms.map((room) => <div className="sr-live-room" key={room.id}><button className="sr-live-open" onClick={() => setSelected(room)}><Avatar id={room.requester?.avatarId} photoUrl={room.requester?.photoUrl} size="sm" /><span><b>{room.requester?.nickname ?? "실제 회원"}님 대화방</b><small>{person.nickname} 역할로 입장</small></span><strong>● LIVE</strong><ChevronRight /></button><div className="sr-live-controls"><button className="end" onClick={() => endLiveMatch(room)}>종료</button><button className="delete" onClick={() => deleteLiveMatch(room)}>삭제</button></div></div>)}</div> : <p className="sr-live-wait">새로운 회원의 연결을 기다리고 있습니다.</p>}</article>;
       })}</div>}
-      {unassignedLiveMatches.length > 0 && <div className="sr-live-extra"><b>자동 생성 상대 연결</b>{unassignedLiveMatches.map((match) => <button key={match.id} onClick={() => setSelected(match)}>{match.persona.nickname} 역할 · {match.requester?.nickname ?? "실제 회원"}님 <span>● LIVE</span></button>)}</div>}
+      {unassignedLiveMatches.length > 0 && <div className="sr-live-extra"><b>자동 생성 상대 연결</b>{unassignedLiveMatches.map((match) => <div className="sr-live-extra-row" key={match.id}><button className="open" onClick={() => setSelected(match)}>{match.persona.nickname} 역할 · {match.requester?.nickname ?? "실제 회원"}님 <span>● LIVE</span></button><button onClick={() => endLiveMatch(match)}>종료</button><button className="delete" onClick={() => deleteLiveMatch(match)}>삭제</button></div>)}</div>}
     </section>
     <div className="sr-admin-count"><b>저장된 전체 대화</b><span>{otherMatches.length}개</span></div>{otherMatches.length === 0 ? <p className="sr-list-empty">아직 저장된 다른 대화가 없습니다.</p> : <div className="sr-admin-list">{otherMatches.map((match) => <button key={match.id} onClick={() => setSelected(match)}><Avatar id={match.requester?.avatarId} photoUrl={match.requester?.photoUrl} /><div><b>{match.requester?.nickname ?? "회원"} <span>↔ {match.persona.nickname}</span></b><small>{match.mode === "direct" ? "회원 간 직접 대화 · 열람 전용" : match.kind === "ai" ? "AI 대화" : "공개회원 역할 대화 기록"}</small><em>{match.status === "live" ? "● 진행 중 · 열기" : "저장된 대화 · 열기"}</em></div><ChevronRight /></button>)}</div>}</div></section>;
 }

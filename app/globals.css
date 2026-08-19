@@ -70,3 +70,22 @@ button,input,select,textarea { font:inherit; } button { cursor:pointer; } button
   }
 }
 @media (prefers-reduced-motion:reduce) { *,*:before,*:after { animation-duration:.01ms!important; animation-iteration-count:1!important; scroll-behavior:auto!important; } }
+
+/* A LIVE conversation has a large open target plus separate, deliberate management actions. */
+.sr-live-room { border-bottom:1px solid #d9f0e2; background:#fff; }
+.sr-live-room:last-child { border-bottom:0; }
+.sr-live-rooms .sr-live-open { width:100%; min-height:54px; padding:7px 9px; display:flex; align-items:center; gap:8px; border:0; border-bottom:0; color:var(--ink); background:#fff; text-align:left; }
+.sr-live-open>span { min-width:0; flex:1; }
+.sr-live-open b,.sr-live-open small { display:block; }
+.sr-live-open b { font-size:11px; }
+.sr-live-open small { margin-top:3px; color:var(--muted); font-size:9px; }
+.sr-live-open>strong { color:#15964f; font-size:9px; }
+.sr-live-open>svg { width:15px; color:#45a96e; }
+.sr-live-controls { display:flex; justify-content:flex-end; gap:6px; padding:0 9px 8px; }
+.sr-live-rooms .sr-live-controls button { width:auto; min-width:52px; min-height:31px; padding:5px 11px; display:block; border:1px solid #d8cdd1; border-radius:9px; background:#fff; font-size:10px; font-weight:800; text-align:center; }
+.sr-live-controls .end { color:#6d5c64; }
+.sr-live-controls .delete { color:#b83045; border-color:#efcbd1; background:#fff8f9; }
+.sr-live-extra-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:5px; margin-top:6px; }
+.sr-live-extra .sr-live-extra-row button { width:auto; min-height:34px; padding:7px 9px; justify-content:center; border:1px solid #e0d6da; }
+.sr-live-extra .sr-live-extra-row .open { min-width:0; justify-content:space-between; text-align:left; }
+.sr-live-extra .sr-live-extra-row .delete { color:#b83045; border-color:#efcbd1; background:#fff8f9; }
