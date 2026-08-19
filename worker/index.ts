@@ -46,6 +46,15 @@ type ChatProfile = {
   user_id: string;
   nickname: string;
   avatar_id: string;
+  gender: string;
+  age_band: string;
+  region: string;
+  job: string;
+  introduction: string;
+  photo_key: string | null;
+  photo_content_type: string | null;
+  is_discoverable: number;
+  is_test_profile: number;
 };
 
 type RandomMatch = {
@@ -62,6 +71,19 @@ type RandomMatch = {
   persona_avatar_id: string;
   status: "live" | "ended" | "blocked";
   created_at: string;
+  target_user_id: string | null;
+  mode: "managed" | "direct" | "ai";
+  last_message_at: string | null;
+  requester_nickname?: string;
+  requester_gender?: string;
+  requester_region?: string;
+  requester_age_band?: string;
+  requester_job?: string;
+  requester_avatar_id?: string;
+  requester_introduction?: string;
+  requester_photo_key?: string | null;
+  target_introduction?: string;
+  target_photo_key?: string | null;
 };
 
 const SESSION_COOKIE = "pt_session";
@@ -70,8 +92,13 @@ const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const PASSWORD_ITERATIONS = 100_000;
 const MAX_JSON_BYTES = 24_000;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024;
 const PUBLIC_WORKER_ORIGIN = "https://theham-private-talk.hhongcjun.workers.dev";
 const AVATAR_IDS = new Set(["f1", "f2", "f3", "f4", "f5", "m1", "m2", "m3", "m4", "m5"]);
+const PROFILE_GENDERS = ["여성", "남성", "기타", "공개 안 함"] as const;
+const PROFILE_AGES = ["20대", "30대", "40대", "50대 이상"] as const;
+const PROFILE_REGIONS = ["서울", "경기", "인천", "부산", "대구", "대전", "광주", "울산", "강원", "충청", "전라", "경상", "제주"] as const;
+const PROFILE_JOBS = ["회사원", "자영업", "프리랜서", "전문직", "공무원", "학생", "기타"] as const;
 const AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
 
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
@@ -126,6 +153,17 @@ export class ChatRoom extends DurableObject<AppEnv> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname.endsWith("/export")) {
+      const rows = [...this.ctx.storage.sql.exec<{
+        id: string; room_id: string; sender_id: string; author: string; text: string; created_at: string;
+      }>("SELECT id, room_id, sender_id, author, text, created_at FROM messages ORDER BY created_at ASC")];
+      return json({
+        messages: rows.map((row) => ({
+          id: row.id, roomId: row.room_id, senderId: row.sender_id, author: row.author,
+          text: row.text, createdAt: row.created_at,
+        })),
+      });
+    }
     if (request.method === "GET" && url.pathname.endsWith("/history")) {
       const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 200);
       const rows = [...this.ctx.storage.sql.exec<{
@@ -343,31 +381,74 @@ function assertAvatar(value: unknown): string {
   return avatarId;
 }
 
+function optionalAvatar(value: unknown): string {
+  const avatarId = String(value ?? "");
+  if (avatarId && !AVATAR_IDS.has(avatarId)) throw new HttpError(400, "올바른 아바타를 선택해 주세요.");
+  return avatarId;
+}
+
+function profileChoice(value: unknown, label: string, allowed: readonly string[]): string {
+  const selected = cleanText(value, 30);
+  if (!allowed.includes(selected)) throw new HttpError(400, `${label}을(를) 선택해 주세요.`);
+  return selected;
+}
+
 function isUnsafeChat(text: string): boolean {
   return /(아동|미성년|초등학생|중학생).{0,12}(성관계|야한|누드|만남)|자살\s*(방법|하는법)|마약\s*(판매|구매)/i.test(text);
 }
 
 async function chatProfile(env: AppEnv, userId: string): Promise<ChatProfile | null> {
   return (await env.DB.prepare(
-    "SELECT user_id, nickname, avatar_id FROM chat_profiles WHERE user_id = ?",
+    `SELECT user_id, nickname, avatar_id, gender, age_band, region, job, introduction,
+      photo_key, photo_content_type, is_discoverable, is_test_profile
+    FROM chat_profiles WHERE user_id = ?`,
   ).bind(userId).first<ChatProfile>()) ?? null;
 }
 
-function publicMatch(row: RandomMatch): Record<string, unknown> {
+function publicProfile(profile: ChatProfile): Record<string, unknown> {
+  return {
+    userId: profile.user_id,
+    nickname: profile.nickname,
+    gender: profile.gender,
+    ageBand: profile.age_band,
+    region: profile.region,
+    job: profile.job,
+    introduction: profile.introduction,
+    avatarId: profile.avatar_id,
+    photoUrl: profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null,
+  };
+}
+
+function publicMatch(row: RandomMatch, viewerId?: string): Record<string, unknown> {
+  const viewerIsTarget = Boolean(viewerId && row.mode === "direct" && row.target_user_id === viewerId);
+  const persona = viewerIsTarget ? {
+    nickname: row.requester_nickname ?? "회원",
+    gender: row.requester_gender ?? "공개 안 함",
+    region: row.requester_region ?? "공개 안 함",
+    ageBand: row.requester_age_band ?? "공개 안 함",
+    job: row.requester_job ?? "공개 안 함",
+    avatarId: row.requester_avatar_id ?? "",
+    introduction: row.requester_introduction ?? "",
+    photoUrl: row.requester_photo_key ? `/api/random/profile/photo/${row.requester_id}` : null,
+  } : {
+    nickname: row.persona_nickname,
+    gender: row.persona_gender,
+    region: row.persona_region,
+    ageBand: row.persona_age_band,
+    job: row.persona_job,
+    avatarId: row.persona_avatar_id,
+    introduction: row.target_introduction ?? "",
+    photoUrl: row.target_photo_key && row.target_user_id ? `/api/random/profile/photo/${row.target_user_id}` : null,
+  };
   return {
     id: row.id,
     roomId: row.room_id,
     kind: row.kind,
     status: row.status,
     createdAt: row.created_at,
-    persona: {
-      nickname: row.persona_nickname,
-      gender: row.persona_gender,
-      region: row.persona_region,
-      ageBand: row.persona_age_band,
-      job: row.persona_job,
-      avatarId: row.persona_avatar_id,
-    },
+    mode: row.mode,
+    lastMessageAt: row.last_message_at,
+    persona,
   };
 }
 
@@ -580,15 +661,22 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
   if (url.pathname === "/api/random/signup" && request.method === "POST") {
     const body = await readJsonBody<{
       name?: unknown; phoneNumber?: unknown; nickname?: unknown; avatarId?: unknown;
-      adultAccepted?: unknown; termsAccepted?: unknown;
+      gender?: unknown; ageBand?: unknown; region?: unknown; job?: unknown; introduction?: unknown;
+      adultAccepted?: unknown; termsAccepted?: unknown; monitoringAccepted?: unknown;
     }>(request);
     const name = identityName(body.name);
     const phoneNumber = assertPhoneNumber(body.phoneNumber);
     const phoneLast4 = phoneNumber.slice(-4);
     const nickname = assertNickname(body.nickname);
-    const avatarId = assertAvatar(body.avatarId);
-    if (body.adultAccepted !== true || body.termsAccepted !== true) {
-      throw new HttpError(400, "만 19세 이상 확인과 이용규칙 동의가 필요합니다.");
+    const avatarId = optionalAvatar(body.avatarId);
+    const gender = profileChoice(body.gender, "성별", PROFILE_GENDERS);
+    const ageBand = profileChoice(body.ageBand, "나이", PROFILE_AGES);
+    const region = profileChoice(body.region, "지역", PROFILE_REGIONS);
+    const job = profileChoice(body.job, "직업", PROFILE_JOBS);
+    const introduction = cleanText(body.introduction, 240);
+    if (introduction.length < 2) throw new HttpError(400, "간단한 자기소개를 2글자 이상 입력해 주세요.");
+    if (body.adultAccepted !== true || body.termsAccepted !== true || body.monitoringAccepted !== true) {
+      throw new HttpError(400, "성인 확인, 이용규칙과 대화 저장·운영 열람 안내 동의가 필요합니다.");
     }
     const phoneNumberHash = await protectedIdentityHash(env, "phone", phoneNumber);
     const loginKeyHash = await protectedIdentityHash(env, "login", `${name.toLowerCase()}:${phoneLast4}`);
@@ -615,16 +703,18 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
         INSERT INTO chat_profiles (
           user_id, nickname, phone_last4_hash, phone_last4_salt, phone_last4_iterations,
           avatar_id, adult_confirmed_at, terms_accepted_at, created_at, updated_at,
-          phone_number_hash, login_key_hash
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          phone_number_hash, login_key_hash, gender, age_band, region, job, introduction,
+          is_discoverable, is_test_profile
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
       `).bind(userId, nickname, passwordData.hash, passwordData.salt, passwordData.iterations,
-        avatarId, now, now, now, now, phoneNumberHash, loginKeyHash),
+        avatarId, now, now, now, now, phoneNumberHash, loginKeyHash,
+        gender, ageBand, region, job, introduction),
     ]);
     const token = await createSession(env, request, userId);
     await audit(env, request, userId, "random.signup", "user", userId, { avatarId });
     return json({
       user: { id: userId, display_name: name, role: "member", status: "active" },
-      profile: { user_id: userId, nickname, avatar_id: avatarId },
+      profile: await chatProfile(env, userId),
     }, 201, { "Set-Cookie": sessionCookie(token) });
   }
 
@@ -677,7 +767,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const token = await createSession(env, request, row!.id);
     return json({
       user: { id: row!.id, display_name: row!.display_name, role: row!.role, status: row!.status },
-      profile: { user_id: row!.id, nickname: row!.nickname, avatar_id: row!.avatar_id },
+      profile: await chatProfile(env, row!.id),
     }, 200, { "Set-Cookie": sessionCookie(token) });
   }
 
@@ -887,13 +977,139 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     return json({ user, profile });
   }
 
+  if (url.pathname === "/api/random/profile/photo" && request.method === "POST") {
+    const contentType = (request.headers.get("Content-Type") ?? "").split(";")[0].toLowerCase();
+    if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
+      throw new HttpError(400, "얼굴 사진은 JPG, PNG, WebP 파일만 사용할 수 있습니다.");
+    }
+    if (!request.body) throw new HttpError(400, "업로드할 사진을 선택해 주세요.");
+    const bytes = await request.arrayBuffer();
+    if (!bytes.byteLength || bytes.byteLength > MAX_PROFILE_PHOTO_BYTES) {
+      throw new HttpError(413, "얼굴 사진은 5MB 이하만 업로드할 수 있습니다.");
+    }
+    const profile = await chatProfile(env, user.id);
+    if (!profile) throw new HttpError(404, "채팅 프로필이 없습니다.");
+    const extension = contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
+    const storageKey = `profile-photos/${user.id}/${crypto.randomUUID()}.${extension}`;
+    await env.FILES.put(storageKey, bytes, { httpMetadata: { contentType }, customMetadata: { ownerId: user.id } });
+    await env.DB.prepare(`
+      UPDATE chat_profiles SET photo_key = ?, photo_content_type = ?, updated_at = ? WHERE user_id = ?
+    `).bind(storageKey, contentType, new Date().toISOString(), user.id).run();
+    if (profile.photo_key) ctx.waitUntil(env.FILES.delete(profile.photo_key));
+    await audit(env, request, user.id, "profile.photo_uploaded", "user", user.id);
+    return json({ photoUrl: `/api/random/profile/photo/${user.id}` }, 201);
+  }
+
+  const profilePhotoMatch = url.pathname.match(/^\/api\/random\/profile\/photo\/([^/]+)$/);
+  if (profilePhotoMatch && request.method === "GET") {
+    const profile = await env.DB.prepare(`
+      SELECT photo_key, photo_content_type FROM chat_profiles WHERE user_id = ?
+    `).bind(profilePhotoMatch[1]).first<{ photo_key: string | null; photo_content_type: string | null }>();
+    if (!profile?.photo_key) throw new HttpError(404, "등록된 얼굴 사진이 없습니다.");
+    const object = await env.FILES.get(profile.photo_key);
+    if (!object) throw new HttpError(404, "등록된 얼굴 사진이 없습니다.");
+    return new Response(object.body, {
+      headers: {
+        "Content-Type": profile.photo_content_type ?? "image/jpeg",
+        "Cache-Control": "private, max-age=300",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  }
+
+  if (url.pathname === "/api/random/discover" && request.method === "GET") {
+    const result = await env.DB.prepare(`
+      SELECT p.user_id, p.nickname, p.avatar_id, p.gender, p.age_band, p.region, p.job,
+        p.introduction, p.photo_key, p.photo_content_type, p.is_discoverable, p.is_test_profile,
+        CASE WHEN p.is_test_profile = 1 OR EXISTS (
+          SELECT 1 FROM sessions s WHERE s.user_id = p.user_id AND s.expires_at > ?
+        ) THEN 1 ELSE 0 END AS is_online
+      FROM chat_profiles p JOIN users u ON u.id = p.user_id
+      WHERE p.user_id != ? AND p.is_discoverable = 1 AND u.status = 'active'
+      ORDER BY is_online DESC, p.updated_at DESC LIMIT 100
+    `).bind(new Date().toISOString(), user.id).all<ChatProfile & { is_online: number }>();
+    return json({ profiles: result.results.map((profile) => ({ ...publicProfile(profile), online: Boolean(profile.is_online) })) });
+  }
+
+  const directMatch = url.pathname.match(/^\/api\/random\/direct\/([^/]+)$/);
+  if (directMatch && request.method === "POST") {
+    const requester = await chatProfile(env, user.id);
+    if (!requester) throw new HttpError(403, "먼저 채팅 회원가입을 해 주세요.");
+    const target = await chatProfile(env, directMatch[1]);
+    if (!target || !target.is_discoverable || target.user_id === user.id) throw new HttpError(404, "선택한 상대를 찾을 수 없습니다.");
+    const mode = target.is_test_profile ? "managed" : "direct";
+    const existing = await env.DB.prepare(`
+      SELECT m.id, m.room_id, m.requester_id, m.operator_id, m.kind, m.persona_nickname,
+        m.persona_gender, m.persona_region, m.persona_age_band, m.persona_job, m.persona_avatar_id,
+        m.status, m.created_at, m.target_user_id, m.mode, m.last_message_at,
+        rp.nickname AS requester_nickname, rp.gender AS requester_gender, rp.region AS requester_region,
+        rp.age_band AS requester_age_band, rp.job AS requester_job, rp.avatar_id AS requester_avatar_id,
+        rp.introduction AS requester_introduction, rp.photo_key AS requester_photo_key,
+        tp.introduction AS target_introduction, tp.photo_key AS target_photo_key
+      FROM random_matches m
+      LEFT JOIN chat_profiles rp ON rp.user_id = m.requester_id
+      LEFT JOIN chat_profiles tp ON tp.user_id = m.target_user_id
+      WHERE m.status != 'blocked' AND ((m.requester_id = ? AND m.target_user_id = ?)
+        OR (? = 'direct' AND m.requester_id = ? AND m.target_user_id = ?))
+      ORDER BY m.created_at DESC LIMIT 1
+    `).bind(user.id, target.user_id, mode, target.user_id, user.id).first<RandomMatch>();
+    if (existing) return json({ match: publicMatch(existing, user.id), resumed: true });
+    const operator = await env.DB.prepare(
+      "SELECT id FROM users WHERE role = 'super_admin' AND status = 'active' LIMIT 1",
+    ).first<{ id: string }>();
+    if (!operator) throw new HttpError(503, "채팅 연결을 준비하는 중입니다.");
+    const id = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const ownerId = mode === "managed" ? operator.id : user.id;
+    const statements = [
+      env.DB.prepare(`
+        INSERT INTO rooms (id, name, description, room_type, owner_id, file_enabled, video_enabled, created_at)
+        VALUES (?, ?, '공개 데이트에서 시작된 비밀대화', 'direct', ?, 0, 0, ?)
+      `).bind(roomId, `${requester.nickname} · ${target.nickname}`, ownerId, now),
+      env.DB.prepare("INSERT INTO room_members (room_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)")
+        .bind(roomId, user.id, now),
+      env.DB.prepare("INSERT INTO room_members (room_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)")
+        .bind(roomId, mode === "managed" ? operator.id : target.user_id, mode === "managed" ? "owner" : "member", now),
+      env.DB.prepare(`
+        INSERT INTO random_matches (
+          id, room_id, requester_id, operator_id, kind, desired_nickname, desired_gender,
+          desired_region, desired_age_band, desired_job, persona_nickname, persona_gender,
+          persona_region, persona_age_band, persona_job, persona_avatar_id, status, created_at,
+          target_user_id, mode, last_message_at
+        ) VALUES (?, ?, ?, ?, 'operator', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)
+      `).bind(id, roomId, user.id, operator.id, target.nickname, target.gender, target.region, target.age_band,
+        target.job, target.nickname, target.gender, target.region, target.age_band, target.job, target.avatar_id,
+        now, target.user_id, mode, now),
+    ];
+    await env.DB.batch(statements);
+    await audit(env, request, user.id, "dating.chat_started", "match", id, { mode });
+    const row: RandomMatch = {
+      id, room_id: roomId, requester_id: user.id, operator_id: operator.id, kind: "operator",
+      persona_nickname: target.nickname, persona_gender: target.gender, persona_region: target.region,
+      persona_age_band: target.age_band, persona_job: target.job, persona_avatar_id: target.avatar_id,
+      status: "live", created_at: now, target_user_id: target.user_id, mode, last_message_at: now,
+      target_introduction: target.introduction, target_photo_key: target.photo_key,
+    };
+    return json({ match: publicMatch(row, user.id), resumed: false }, 201);
+  }
+
   if (url.pathname === "/api/random/matches" && request.method === "GET") {
     const result = await env.DB.prepare(`
-      SELECT id, room_id, requester_id, operator_id, kind, persona_nickname, persona_gender,
-        persona_region, persona_age_band, persona_job, persona_avatar_id, status, created_at
-      FROM random_matches WHERE requester_id = ? ORDER BY created_at DESC LIMIT 30
-    `).bind(user.id).all<RandomMatch>();
-    return json({ matches: result.results.map(publicMatch) });
+      SELECT m.id, m.room_id, m.requester_id, m.operator_id, m.kind, m.persona_nickname, m.persona_gender,
+        m.persona_region, m.persona_age_band, m.persona_job, m.persona_avatar_id, m.status, m.created_at,
+        m.target_user_id, m.mode, m.last_message_at,
+        rp.nickname AS requester_nickname, rp.gender AS requester_gender, rp.region AS requester_region,
+        rp.age_band AS requester_age_band, rp.job AS requester_job, rp.avatar_id AS requester_avatar_id,
+        rp.introduction AS requester_introduction, rp.photo_key AS requester_photo_key,
+        tp.introduction AS target_introduction, tp.photo_key AS target_photo_key
+      FROM random_matches m
+      LEFT JOIN chat_profiles rp ON rp.user_id = m.requester_id
+      LEFT JOIN chat_profiles tp ON tp.user_id = m.target_user_id
+      WHERE m.requester_id = ? OR (m.mode = 'direct' AND m.target_user_id = ?)
+      ORDER BY COALESCE(m.last_message_at, m.created_at) DESC LIMIT 60
+    `).bind(user.id, user.id).all<RandomMatch>();
+    return json({ matches: result.results.map((row) => publicMatch(row, user.id)) });
   }
 
   if (url.pathname === "/api/random/matches" && request.method === "POST") {
@@ -906,19 +1122,34 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const operator = await env.DB.prepare(
       "SELECT id FROM users WHERE role = 'super_admin' AND status = 'active' LIMIT 1",
     ).first<{ id: string }>();
-    if (!operator) throw new HttpError(503, "테스트 운영자가 준비되지 않았습니다.");
+    if (!operator) throw new HttpError(503, "채팅 연결을 준비하는 중입니다.");
     const gender = cleanText(body.gender, 12) || "상관없음";
     const region = cleanText(body.region, 20) || "상관없음";
     const ageBand = cleanText(body.ageBand, 12) || "상관없음";
     const job = cleanText(body.job, 30) || "상관없음";
     const avatarId = assertAvatar(body.avatarId);
     const requestedNickname = cleanText(body.nickname, 12);
+    const candidate = await env.DB.prepare(`
+      SELECT p.user_id, p.nickname, p.avatar_id, p.gender, p.age_band, p.region, p.job,
+        p.introduction, p.photo_key, p.photo_content_type, p.is_discoverable, p.is_test_profile
+      FROM chat_profiles p JOIN users u ON u.id = p.user_id
+      WHERE p.user_id != ? AND p.is_discoverable = 1 AND u.status = 'active'
+        AND (? = '' OR p.nickname = ? COLLATE NOCASE)
+        AND (? = '상관없음' OR p.gender = ?)
+        AND (? = '상관없음' OR p.region = ?)
+        AND (? = '상관없음' OR p.age_band = ?)
+        AND (? = '상관없음' OR p.job = ?)
+      ORDER BY RANDOM() LIMIT 1
+    `).bind(user.id, requestedNickname, requestedNickname, gender, gender, region, region,
+      ageBand, ageBand, job, job).first<ChatProfile>();
     const fallbackNames = gender === "남성" ? ["도윤", "준호", "민재", "시우", "현우"] : ["하린", "서아", "지유", "다은", "유나"];
-    const personaNickname = requestedNickname || fallbackNames[Math.floor(Math.random() * fallbackNames.length)];
-    const personaGender = gender === "상관없음" ? (avatarId.startsWith("m") ? "남성" : "여성") : gender;
-    const personaRegion = region === "상관없음" ? ["서울", "경기", "부산", "대전"][Math.floor(Math.random() * 4)] : region;
-    const personaAge = ageBand === "상관없음" ? ["20대", "30대", "40대"][Math.floor(Math.random() * 3)] : ageBand;
-    const personaJob = job === "상관없음" ? ["회사원", "자영업", "프리랜서", "전문직"][Math.floor(Math.random() * 4)] : job;
+    const personaNickname = candidate?.nickname ?? (requestedNickname || fallbackNames[Math.floor(Math.random() * fallbackNames.length)]);
+    const personaGender = candidate?.gender ?? (gender === "상관없음" ? (avatarId.startsWith("m") ? "남성" : "여성") : gender);
+    const personaRegion = candidate?.region ?? (region === "상관없음" ? ["서울", "경기", "부산", "대전"][Math.floor(Math.random() * 4)] : region);
+    const personaAge = candidate?.age_band ?? (ageBand === "상관없음" ? ["20대", "30대", "40대"][Math.floor(Math.random() * 3)] : ageBand);
+    const personaJob = candidate?.job ?? (job === "상관없음" ? ["회사원", "자영업", "프리랜서", "전문직"][Math.floor(Math.random() * 4)] : job);
+    const personaAvatar = candidate?.avatar_id ?? avatarId;
+    const mode = candidate && !candidate.is_test_profile ? "direct" : "managed";
     const id = crypto.randomUUID();
     const roomId = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -926,27 +1157,34 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       env.DB.prepare(`
         INSERT INTO rooms (id, name, description, room_type, owner_id, file_enabled, video_enabled, created_at)
         VALUES (?, ?, '랜덤 비밀대화', 'direct', ?, 0, 0, ?)
-      `).bind(roomId, `${profile.nickname} · ${personaNickname}`, operator.id, now),
+      `).bind(roomId, `${profile.nickname} · ${personaNickname}`, mode === "direct" ? user.id : operator.id, now),
       env.DB.prepare("INSERT INTO room_members (room_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)")
         .bind(roomId, user.id, now),
       env.DB.prepare("INSERT INTO room_members (room_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)")
-        .bind(roomId, operator.id, now),
+        .bind(roomId, mode === "direct" ? candidate!.user_id : operator.id, now),
       env.DB.prepare(`
         INSERT INTO random_matches (
           id, room_id, requester_id, operator_id, kind, desired_nickname, desired_gender,
           desired_region, desired_age_band, desired_job, persona_nickname, persona_gender,
-          persona_region, persona_age_band, persona_job, persona_avatar_id, status, created_at
-        ) VALUES (?, ?, ?, ?, 'operator', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?)
+          persona_region, persona_age_band, persona_job, persona_avatar_id, status, created_at,
+          target_user_id, mode, last_message_at
+        ) VALUES (?, ?, ?, ?, 'operator', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)
       `).bind(id, roomId, user.id, operator.id, requestedNickname, gender, region, ageBand, job,
-        personaNickname, personaGender, personaRegion, personaAge, personaJob, avatarId, now),
+        personaNickname, personaGender, personaRegion, personaAge, personaJob, personaAvatar, now,
+        candidate?.user_id ?? null, mode, now),
     ]);
     await audit(env, request, user.id, "random.match_created", "match", id, { roomId });
     const match = await env.DB.prepare(`
       SELECT id, room_id, requester_id, operator_id, kind, persona_nickname, persona_gender,
-        persona_region, persona_age_band, persona_job, persona_avatar_id, status, created_at
+        persona_region, persona_age_band, persona_job, persona_avatar_id, status, created_at,
+        target_user_id, mode, last_message_at
       FROM random_matches WHERE id = ?
     `).bind(id).first<RandomMatch>();
-    return json({ match: publicMatch(match!) }, 201);
+    if (candidate && match) {
+      match.target_introduction = candidate.introduction;
+      match.target_photo_key = candidate.photo_key;
+    }
+    return json({ match: publicMatch(match!, user.id) }, 201);
   }
 
   if (url.pathname === "/api/random/ai/start" && request.method === "POST") {
@@ -1009,6 +1247,8 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     await roomStub(env, roomId).fetch(new Request(`${url.origin}/messages`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(userMessage),
     }));
+    await env.DB.prepare("UPDATE random_matches SET last_message_at = ? WHERE room_id = ?")
+      .bind(userMessage.createdAt, roomId).run();
     const historyResponse = await roomStub(env, roomId).fetch(new Request(`${url.origin}/history?limit=16`));
     const history = await historyResponse.json<{ messages: MessageRecord[] }>();
     const messages = [
@@ -1024,13 +1264,17 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     await roomStub(env, roomId).fetch(new Request(`${url.origin}/messages`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(aiMessage),
     }));
+    await env.DB.prepare("UPDATE random_matches SET last_message_at = ? WHERE room_id = ?")
+      .bind(aiMessage.createdAt, roomId).run();
     return json({ userMessage, aiMessage }, 201);
   }
 
   const reportMatch = url.pathname.match(/^\/api\/random\/matches\/([^/]+)\/report$/);
   if (reportMatch && request.method === "POST") {
-    const row = await env.DB.prepare("SELECT id FROM random_matches WHERE id = ? AND requester_id = ?")
-      .bind(reportMatch[1], user.id).first();
+    const row = await env.DB.prepare(`
+      SELECT id FROM random_matches WHERE id = ?
+        AND (requester_id = ? OR (mode = 'direct' AND target_user_id = ?))
+    `).bind(reportMatch[1], user.id, user.id).first();
     if (!row) throw new HttpError(404, "대화를 찾을 수 없습니다.");
     const body = await readJsonBody<{ reason?: unknown; detail?: unknown }>(request);
     const reason = cleanText(body.reason, 60);
@@ -1048,8 +1292,8 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
   if (blockMatch && request.method === "POST") {
     const changed = await env.DB.prepare(`
       UPDATE random_matches SET status = 'blocked', ended_at = ?
-      WHERE id = ? AND requester_id = ? AND status = 'live'
-    `).bind(new Date().toISOString(), blockMatch[1], user.id).run();
+      WHERE id = ? AND (requester_id = ? OR (mode = 'direct' AND target_user_id = ?)) AND status = 'live'
+    `).bind(new Date().toISOString(), blockMatch[1], user.id, user.id).run();
     if (!changed.meta.changes) throw new HttpError(404, "진행 중인 대화를 찾을 수 없습니다.");
     await audit(env, request, user.id, "chat.blocked", "match", blockMatch[1]);
     return json({ ok: true });
@@ -1060,14 +1304,119 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const result = await env.DB.prepare(`
       SELECT m.id, m.room_id, m.requester_id, m.operator_id, m.kind, m.persona_nickname,
         m.persona_gender, m.persona_region, m.persona_age_band, m.persona_job,
-        m.persona_avatar_id, m.status, m.created_at, p.nickname AS requester_nickname,
-        p.avatar_id AS requester_avatar_id
-      FROM random_matches m LEFT JOIN chat_profiles p ON p.user_id = m.requester_id
-      ORDER BY CASE m.status WHEN 'live' THEN 0 ELSE 1 END, m.created_at DESC LIMIT 100
-    `).all<RandomMatch & { requester_nickname: string; requester_avatar_id: string }>();
+        m.persona_avatar_id, m.status, m.created_at, m.target_user_id, m.mode, m.last_message_at,
+        rp.nickname AS requester_nickname, rp.gender AS requester_gender, rp.region AS requester_region,
+        rp.age_band AS requester_age_band, rp.job AS requester_job, rp.avatar_id AS requester_avatar_id,
+        rp.introduction AS requester_introduction, rp.photo_key AS requester_photo_key,
+        tp.introduction AS target_introduction, tp.photo_key AS target_photo_key
+      FROM random_matches m
+      LEFT JOIN chat_profiles rp ON rp.user_id = m.requester_id
+      LEFT JOIN chat_profiles tp ON tp.user_id = m.target_user_id
+      ORDER BY CASE m.status WHEN 'live' THEN 0 ELSE 1 END,
+        COALESCE(m.last_message_at, m.created_at) DESC LIMIT 250
+    `).all<RandomMatch>();
     return json({ matches: result.results.map((row) => ({
-      ...publicMatch(row), requester: { nickname: row.requester_nickname, avatarId: row.requester_avatar_id },
+      ...publicMatch(row), requester: {
+        nickname: row.requester_nickname, gender: row.requester_gender, region: row.requester_region,
+        ageBand: row.requester_age_band, job: row.requester_job, avatarId: row.requester_avatar_id,
+        introduction: row.requester_introduction,
+        photoUrl: row.requester_photo_key ? `/api/random/profile/photo/${row.requester_id}` : null,
+      },
     })) });
+  }
+
+  if (url.pathname === "/api/random/admin/test-profiles" && request.method === "GET") {
+    requireAdmin(user);
+    const result = await env.DB.prepare(`
+      SELECT p.user_id, p.nickname, p.avatar_id, p.gender, p.age_band, p.region, p.job,
+        p.introduction, p.photo_key, p.photo_content_type, p.is_discoverable, p.is_test_profile,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM random_matches m WHERE m.target_user_id = p.user_id
+            AND m.mode = 'managed' AND m.status = 'live'
+        ) THEN 1 ELSE 0 END AS is_live
+      FROM chat_profiles p WHERE p.is_test_profile = 1
+      ORDER BY is_live DESC, p.created_at DESC LIMIT 100
+    `).all<ChatProfile & { is_live: number }>();
+    return json({ profiles: result.results.map((profile) => ({ ...publicProfile(profile), live: Boolean(profile.is_live) })) });
+  }
+
+  if (url.pathname === "/api/random/admin/test-profiles" && request.method === "POST") {
+    requireAdmin(user);
+    const body = await readJsonBody<{
+      nickname?: unknown; gender?: unknown; ageBand?: unknown; region?: unknown; job?: unknown;
+      introduction?: unknown; avatarId?: unknown;
+    }>(request);
+    const nickname = assertNickname(body.nickname);
+    const gender = profileChoice(body.gender, "성별", PROFILE_GENDERS);
+    const ageBand = profileChoice(body.ageBand, "나이", PROFILE_AGES);
+    const region = profileChoice(body.region, "지역", PROFILE_REGIONS);
+    const job = profileChoice(body.job, "직업", PROFILE_JOBS);
+    const introduction = cleanText(body.introduction, 240);
+    if (introduction.length < 2) throw new HttpError(400, "자기소개를 2글자 이상 입력해 주세요.");
+    const avatarId = optionalAvatar(body.avatarId);
+    const duplicate = await env.DB.prepare("SELECT user_id FROM chat_profiles WHERE nickname = ? COLLATE NOCASE")
+      .bind(nickname).first();
+    if (duplicate) throw new HttpError(409, "이미 사용 중인 닉네임입니다.");
+    const userId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const credential = await hashPassword(randomToken(32));
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO users (
+          id, email, display_name, organization, role, status, password_hash, password_salt,
+          password_iterations, created_at, updated_at, approved_at, approved_by
+        ) VALUES (?, ?, ?, 'MASTER_TEST_PROFILE', 'member', 'active', ?, ?, ?, ?, ?, ?, ?)
+      `).bind(userId, `managed-${userId}@secret.local`, nickname, credential.hash, credential.salt,
+        credential.iterations, now, now, now, user.id),
+      env.DB.prepare(`
+        INSERT INTO chat_profiles (
+          user_id, nickname, phone_last4_hash, phone_last4_salt, phone_last4_iterations,
+          avatar_id, adult_confirmed_at, terms_accepted_at, created_at, updated_at,
+          gender, age_band, region, job, introduction, is_discoverable, is_test_profile, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?)
+      `).bind(userId, nickname, credential.hash, credential.salt, credential.iterations, avatarId,
+        now, now, now, now, gender, ageBand, region, job, introduction, user.id),
+    ]);
+    await audit(env, request, user.id, "test_profile.created", "user", userId);
+    return json({ profile: publicProfile((await chatProfile(env, userId))!) }, 201);
+  }
+
+  if (url.pathname === "/api/random/admin/export" && request.method === "GET") {
+    requireAdmin(user);
+    const requestedMatchId = url.searchParams.get("matchId");
+    const matches = requestedMatchId ? await env.DB.prepare(`
+      SELECT id, room_id, requester_id, target_user_id, mode, status, persona_nickname, created_at,
+        last_message_at FROM random_matches WHERE id = ? LIMIT 1
+    `).bind(requestedMatchId).all<{
+      id: string; room_id: string; requester_id: string; target_user_id: string | null; mode: string;
+      status: string; persona_nickname: string; created_at: string; last_message_at: string | null;
+    }>() : await env.DB.prepare(`
+      SELECT id, room_id, requester_id, target_user_id, mode, status, persona_nickname, created_at,
+        last_message_at FROM random_matches ORDER BY created_at ASC LIMIT 500
+    `).all<{
+      id: string; room_id: string; requester_id: string; target_user_id: string | null; mode: string;
+      status: string; persona_nickname: string; created_at: string; last_message_at: string | null;
+    }>();
+    const conversations = [];
+    for (const match of matches.results) {
+      const history = await roomStub(env, match.room_id).fetch(new Request(`${url.origin}/export`));
+      const data = await history.json<{ messages: MessageRecord[] }>();
+      conversations.push({
+        matchId: match.id, roomId: match.room_id, requesterId: match.requester_id,
+        targetUserId: match.target_user_id, mode: match.mode, status: match.status,
+        partnerNickname: match.persona_nickname, createdAt: match.created_at,
+        lastMessageAt: match.last_message_at, messages: data.messages,
+      });
+    }
+    await audit(env, request, user.id, "chat.exported", "conversation", null, { conversationCount: conversations.length });
+    const fileName = `theham-chat-export-${new Date().toISOString().slice(0, 10)}.json`;
+    return new Response(JSON.stringify({ exportedAt: new Date().toISOString(), conversations }, null, 2), {
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${fileName}"`,
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
   const adminReplyMatch = url.pathname.match(/^\/api\/random\/admin\/matches\/([^/]+)\/messages$/);
@@ -1076,9 +1425,10 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     const match = await env.DB.prepare(`
       SELECT id, room_id, requester_id, operator_id, kind, persona_nickname, persona_gender,
         persona_region, persona_age_band, persona_job, persona_avatar_id, status, created_at
-      FROM random_matches WHERE id = ? AND operator_id = ? AND kind = 'operator' AND status = 'live'
+      FROM random_matches WHERE id = ? AND operator_id = ? AND kind = 'operator'
+        AND mode = 'managed' AND status = 'live'
     `).bind(adminReplyMatch[1], user.id).first<RandomMatch>();
-    if (!match) throw new HttpError(404, "답변할 테스트 대화를 찾을 수 없습니다.");
+    if (!match) throw new HttpError(404, "답변할 대화를 찾을 수 없습니다.");
     const body = await readJsonBody<{ text?: unknown }>(request);
     const text = cleanText(body.text, 4000);
     if (!text) throw new HttpError(400, "메시지를 입력해 주세요.");
@@ -1089,6 +1439,8 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     await roomStub(env, match.room_id).fetch(new Request(`${url.origin}/messages`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(message),
     }));
+    await env.DB.prepare("UPDATE random_matches SET last_message_at = ? WHERE id = ?")
+      .bind(message.createdAt, match.id).run();
     return json({ message }, 201);
   }
 
@@ -1107,7 +1459,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
   const historyMatch = url.pathname.match(/^\/api\/cloudflare\/rooms\/([^/]+)\/messages$/);
   if (historyMatch && request.method === "GET") {
     const roomId = historyMatch[1];
-    await requireRoomMember(env, roomId, user.id);
+    if (user.role === "member") await requireRoomMember(env, roomId, user.id);
     return roomStub(env, roomId).fetch(new Request(`${url.origin}/history?limit=${url.searchParams.get("limit") ?? "100"}`));
   }
 
@@ -1127,17 +1479,20 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       text,
       createdAt: new Date().toISOString(),
     };
-    return roomStub(env, roomId).fetch(new Request(`${url.origin}/messages`, {
+    const response = await roomStub(env, roomId).fetch(new Request(`${url.origin}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(message),
     }));
+    await env.DB.prepare("UPDATE random_matches SET last_message_at = ? WHERE room_id = ?")
+      .bind(message.createdAt, roomId).run();
+    return response;
   }
 
   const socketMatch = url.pathname.match(/^\/api\/cloudflare\/rooms\/([^/]+)\/socket$/);
   if (socketMatch && request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
     const roomId = socketMatch[1];
-    await requireRoomMember(env, roomId, user.id);
+    if (user.role === "member") await requireRoomMember(env, roomId, user.id);
     const headers = new Headers(request.headers);
     headers.set("X-Private-Talk-User", user.id);
     headers.set("X-Private-Talk-Name", encodeURIComponent(user.display_name));

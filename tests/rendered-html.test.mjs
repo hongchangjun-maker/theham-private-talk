@@ -18,6 +18,11 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.match(component, /마스터 관리자/);
   assert.match(component, /5초 룰렛 시작하기/);
   assert.match(component, /루미 AI와 대화/);
+  assert.match(component, /공개 데이트 채팅/);
+  assert.match(component, /간단한 자기소개/);
+  assert.match(component, /대화 저장과 운영 열람 안내/);
+  assert.match(component, /전체 대화 저장/);
+  assert.doesNotMatch(component, /테스트 운영자 대행/);
   assert.match(component, /신고하기/);
   assert.match(component, /차단하고 끝내기/);
   assert.match(layout, /lang="ko"/);
@@ -29,6 +34,10 @@ test("Worker owns signup, random matching, realtime chat, AI, and moderation rou
   assert.match(source, /backend: "cloudflare"/);
   assert.match(source, /\/api\/random\/signup/);
   assert.match(source, /\/api\/random\/matches/);
+  assert.match(source, /\/api\/random\/discover/);
+  assert.match(source, /\/api\/random\/profile\/photo/);
+  assert.match(source, /\/api\/random\/admin\/test-profiles/);
+  assert.match(source, /\/api\/random\/admin\/export/);
   assert.match(source, /env\.AI\.run/);
   assert.match(source, /\/api\/cloudflare\/master-login/);
   assert.match(source, /env\.MASTER_PIN/);
@@ -47,15 +56,16 @@ test("PWA manifest and service worker use the new product branding", async () =>
   const parsed = JSON.parse(manifest);
   assert.equal(parsed.name, "THEHAM 비밀친구");
   assert.equal(parsed.display, "standalone");
-  assert.match(sw, /secret-friend-shell-v6-random-chat/);
+  assert.match(sw, /secret-friend-shell-v7-dating-profiles/);
   assert.match(sw, /pathname\.startsWith\("\/api\/"\)/);
 });
 
 test("Cloudflare schema hashes access data and provides moderation tables", async () => {
-  const [schema, randomChatMigration, phoneIdentityMigration] = await Promise.all([
+  const [schema, randomChatMigration, phoneIdentityMigration, datingMigration] = await Promise.all([
     readFile(new URL("../migrations/0001_cloudflare_core.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0003_secret_roulette.sql", import.meta.url), "utf8"),
     readFile(new URL("../migrations/0004_phone_identity.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0005_dating_profiles_and_monitoring.sql", import.meta.url), "utf8"),
   ]);
   assert.match(schema, /token_hash TEXT PRIMARY KEY/i);
   assert.doesNotMatch(schema, /\btoken TEXT\b/i);
@@ -65,4 +75,8 @@ test("Cloudflare schema hashes access data and provides moderation tables", asyn
   assert.match(randomChatMigration, /CREATE TABLE IF NOT EXISTS chat_reports/i);
   assert.match(phoneIdentityMigration, /phone_number_hash TEXT/i);
   assert.match(phoneIdentityMigration, /login_key_hash TEXT/i);
+  assert.match(datingMigration, /introduction TEXT/i);
+  assert.match(datingMigration, /is_test_profile INTEGER/i);
+  assert.match(datingMigration, /target_user_id TEXT/i);
+  assert.match(datingMigration, /last_message_at TEXT/i);
 });

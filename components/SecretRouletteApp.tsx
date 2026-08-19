@@ -3,18 +3,18 @@
 /* eslint-disable @next/next/no-img-element */
 
 import {
-  ArrowLeft, Bot, Check, ChevronRight, CircleUserRound, Flag, Heart,
-  LockKeyhole, LogOut, MessageCircleHeart, Send, ShieldCheck, Sparkles,
+  ArrowLeft, Bot, Camera, Check, ChevronRight, CircleUserRound, Download, Eye, Flag, Heart,
+  ImagePlus, Info, LockKeyhole, LogOut, MessageCircleHeart, Plus, Send, ShieldCheck, Sparkles,
   UserRoundSearch, UsersRound, X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 type User = { id: string; display_name: string; role: "member" | "admin" | "super_admin"; status: string };
-type Profile = { user_id: string; nickname: string; avatar_id: string };
-type Persona = { nickname: string; gender: string; region: string; ageBand: string; job: string; avatarId: string };
-type Match = { id: string; roomId: string; kind: "operator" | "ai"; status: string; createdAt: string; persona: Persona; requester?: { nickname: string; avatarId: string } };
+type Profile = { user_id: string; nickname: string; avatar_id: string; gender: string; age_band: string; region: string; job: string; introduction: string; photo_key?: string | null };
+type Persona = { userId?: string; nickname: string; gender: string; region: string; ageBand: string; job: string; introduction?: string; avatarId: string; photoUrl?: string | null; online?: boolean };
+type Match = { id: string; roomId: string; kind: "operator" | "ai"; mode?: "managed" | "direct" | "ai"; status: string; createdAt: string; lastMessageAt?: string | null; persona: Persona; requester?: Persona };
 type Message = { id: string; roomId: string; senderId: string; author: string; text: string; createdAt: string };
-type Screen = "loading" | "welcome" | "signup" | "login" | "home" | "match" | "roulette" | "chat" | "admin-login" | "admin";
+type Screen = "loading" | "welcome" | "signup" | "login" | "home" | "match" | "discover" | "roulette" | "chat" | "admin-login" | "admin";
 
 const avatars = [
   { id: "f1", src: "/avatars/f1.webp", label: "우아한 스타일", gender: "여성" },
@@ -30,8 +30,11 @@ const avatars = [
 ] as const;
 
 const regions = ["상관없음", "서울", "경기", "인천", "부산", "대구", "대전", "광주", "울산", "강원", "충청", "전라", "경상", "제주"];
+const profileRegions = regions.slice(1);
 const ageBands = ["상관없음", "20대", "30대", "40대", "50대 이상"];
+const profileAges = ageBands.slice(1);
 const jobs = ["상관없음", "회사원", "자영업", "프리랜서", "전문직", "공무원", "학생", "기타"];
+const profileJobs = jobs.slice(1);
 
 function avatarSrc(id?: string) {
   return avatars.find((item) => item.id === id)?.src ?? "/avatars/f2.webp";
@@ -48,8 +51,17 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
-function Avatar({ id, size = "md", alt = "아바타" }: { id?: string; size?: "sm" | "md" | "lg" | "xl"; alt?: string }) {
-  return <img className={`sr-avatar sr-avatar-${size}`} src={avatarSrc(id)} alt={alt} />;
+function Avatar({ id, photoUrl, size = "md", alt = "프로필" }: { id?: string; photoUrl?: string | null; size?: "sm" | "md" | "lg" | "xl"; alt?: string }) {
+  if (!photoUrl && !id) return <span className={`sr-avatar sr-avatar-${size} sr-avatar-empty`} aria-label="프로필 사진 없음"><CircleUserRound /></span>;
+  return <img className={`sr-avatar sr-avatar-${size}`} src={photoUrl || avatarSrc(id)} alt={alt} />;
+}
+
+async function uploadProfilePhoto(file: File): Promise<void> {
+  const response = await fetch("/api/random/profile/photo", {
+    method: "POST", credentials: "include", headers: { "Content-Type": file.type }, body: file,
+  });
+  const data = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) throw new Error(data.error || "사진을 올리지 못했습니다.");
 }
 
 function TopBar({ title, onBack, right }: { title: string; onBack?: () => void; right?: React.ReactNode }) {
@@ -91,6 +103,12 @@ export function SecretRouletteApp() {
       .catch(() => setScreen("welcome"));
   }, [loadMatches]);
 
+  useEffect(() => {
+    if (screen !== "home") return;
+    const timer = setInterval(() => loadMatches().catch(() => undefined), 5000);
+    return () => clearInterval(timer);
+  }, [screen, loadMatches]);
+
   async function logout() {
     await api("/api/cloudflare/logout", { method: "POST" }).catch(() => undefined);
     setUser(null); setProfile(null); setMatches([]); setActiveMatch(null); setScreen("welcome");
@@ -106,11 +124,16 @@ export function SecretRouletteApp() {
           {notice && <div className="sr-toast" role="status">{notice}<button onClick={() => setNotice("")}><X /></button></div>}
           {screen === "loading" && <Loading />}
           {screen === "welcome" && <Welcome onSignup={() => setScreen("signup")} onLogin={() => setScreen("login")} onAdmin={() => setScreen("admin-login")} />}
-          {screen === "signup" && <Signup busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (payload) => {
+          {screen === "signup" && <Signup busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (payload, photo) => {
             setBusy(true); setNotice("");
             try {
               const data = await api<{ user: User; profile: Profile }>("/api/random/signup", { method: "POST", body: JSON.stringify(payload) });
-              setUser(data.user); setProfile(data.profile); setMatches([]); setScreen("home");
+              let nextProfile = data.profile;
+              if (photo) {
+                await uploadProfilePhoto(photo);
+                nextProfile = (await api<{ profile: Profile }>("/api/random/profile")).profile;
+              }
+              setUser(data.user); setProfile(nextProfile); setMatches([]); setScreen("home");
             } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
           }} />}
           {screen === "login" && <MemberLogin busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (name, phoneLast4) => {
@@ -120,11 +143,18 @@ export function SecretRouletteApp() {
               setUser(data.user); setProfile(data.profile); await loadMatches(); setScreen("home");
             } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
           }} />}
-          {screen === "home" && profile && <Home profile={profile} matches={matches} onMatch={() => setScreen("match")} onAi={async () => {
+          {screen === "home" && profile && <Home profile={profile} matches={matches} onMatch={() => setScreen("match")} onDiscover={() => setScreen("discover")} onAi={async () => {
             setBusy(true); setNotice("");
             try { const data = await api<{ match: Match }>("/api/random/ai/start", { method: "POST" }); await loadMatches(); openChat(data.match); }
             catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
           }} onOpen={openChat} onLogout={logout} busy={busy} />}
+          {screen === "discover" && <Discover onBack={() => setScreen("home")} onOpen={async (targetId) => {
+            setBusy(true); setNotice("");
+            try {
+              const data = await api<{ match: Match }>(`/api/random/direct/${targetId}`, { method: "POST" });
+              await loadMatches(); openChat(data.match);
+            } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
+          }} busy={busy} />}
           {screen === "match" && <MatchSetup onBack={() => setScreen("home")} onStart={async (preferences) => {
             setScreen("roulette"); setNotice("");
             try {
@@ -167,21 +197,31 @@ function Welcome({ onSignup, onLogin, onAdmin }: { onSignup: () => void; onLogin
   );
 }
 
-function Signup({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (data: Record<string, unknown>) => void; busy: boolean }) {
+function Signup({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (data: Record<string, unknown>, photo: File | null) => void; busy: boolean }) {
   const [name, setName] = useState(""); const [phone, setPhone] = useState(""); const [nickname, setNickname] = useState("");
-  const [avatarId, setAvatarId] = useState(""); const [adult, setAdult] = useState(false); const [terms, setTerms] = useState(false);
-  function submit(event: FormEvent) { event.preventDefault(); onSubmit({ name, phoneNumber: phone, nickname, avatarId, adultAccepted: adult, termsAccepted: terms }); }
-  return <section className="sr-page"><TopBar title="3분 회원가입" onBack={onBack} /><form className="sr-scroll sr-form" onSubmit={submit}>
-    <div className="sr-step-title"><span>1</span><div><strong>내 정보를 적어 주세요</strong><p>다른 사람에게는 닉네임만 보여요.</p></div></div>
+  const [gender, setGender] = useState("여성"); const [ageBand, setAgeBand] = useState("20대"); const [region, setRegion] = useState("서울"); const [job, setJob] = useState("회사원");
+  const [introduction, setIntroduction] = useState(""); const [avatarId, setAvatarId] = useState(""); const [photo, setPhoto] = useState<File | null>(null);
+  const [adult, setAdult] = useState(false); const [terms, setTerms] = useState(false); const [monitoring, setMonitoring] = useState(false);
+  function pickPhoto(file?: File) { if (file) setPhoto(file); }
+  function submit(event: FormEvent) { event.preventDefault(); onSubmit({ name, phoneNumber: phone, nickname, gender, ageBand, region, job, introduction, avatarId, adultAccepted: adult, termsAccepted: terms, monitoringAccepted: monitoring }, photo); }
+  return <section className="sr-page"><TopBar title="회원가입" onBack={onBack} /><form className="sr-scroll sr-form" onSubmit={submit}>
+    <div className="sr-step-title"><span>1</span><div><strong>내 정보를 적어 주세요</strong><p>이름과 전화번호는 다른 사람에게 보이지 않아요.</p></div></div>
     <label>이름<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={40} required /></label>
     <label>전화번호<input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))} inputMode="numeric" autoComplete="tel" pattern="\d{10,11}" minLength={10} maxLength={11} required /><small>전화번호 전체를 숫자로 입력해 주세요. 로그인할 때는 끝 4자리만 사용합니다.</small></label>
     <label>채팅 닉네임<input value={nickname} onChange={(e) => setNickname(e.target.value.slice(0, 10))} minLength={2} maxLength={10} required /><small>한글·영문·숫자로 2~10글자까지 입력할 수 있어요.</small></label>
-    <div className="sr-step-title"><span>2</span><div><strong>내 아바타를 골라 주세요</strong><p>사진을 누르면 선택돼요.</p></div></div>
+    <div className="sr-select-row"><label>성별<select value={gender} onChange={(e) => setGender(e.target.value)}>{["여성", "남성", "기타", "공개 안 함"].map((v) => <option key={v}>{v}</option>)}</select></label><label>나이<select value={ageBand} onChange={(e) => setAgeBand(e.target.value)}>{profileAges.map((v) => <option key={v}>{v}</option>)}</select></label></div>
+    <div className="sr-select-row"><label>지역<select value={region} onChange={(e) => setRegion(e.target.value)}>{profileRegions.map((v) => <option key={v}>{v}</option>)}</select></label><label>직업<select value={job} onChange={(e) => setJob(e.target.value)}>{profileJobs.map((v) => <option key={v}>{v}</option>)}</select></label></div>
+    <label>간단한 자기소개<textarea value={introduction} onChange={(e) => setIntroduction(e.target.value.slice(0, 240))} minLength={2} maxLength={240} required /><small>{introduction.length}/240 · 상대가 ‘자기소개 보기’를 누르면 보여요.</small></label>
+    <div className="sr-step-title"><span>2</span><div><strong>얼굴 또는 아바타</strong><p>선택사항이라 아무것도 넣지 않아도 돼요.</p></div></div>
+    <div className="sr-photo-actions"><label><ImagePlus /> 사진 선택<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => pickPhoto(e.target.files?.[0])} /></label><label><Camera /> 카메라 촬영<input type="file" accept="image/*" capture="user" onChange={(e) => pickPhoto(e.target.files?.[0])} /></label></div>
+    {photo && <div className="sr-file-picked"><Check /> {photo.name}<button type="button" onClick={() => setPhoto(null)}>지우기</button></div>}
     <AvatarGrid value={avatarId} onChange={setAvatarId} />
+    {avatarId && <button type="button" className="sr-clear-choice" onClick={() => setAvatarId("")}>아바타 선택 지우기</button>}
     <div className="sr-step-title"><span>3</span><div><strong>안전 약속을 확인해 주세요</strong></div></div>
     <label className="sr-check"><input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} /><span><b>나는 만 19세 이상 성인입니다.</b></span></label>
     <label className="sr-check"><input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} /><span><b>욕설·괴롭힘·불법 대화를 하지 않겠습니다.</b><small><a href="/terms" target="_blank">이용규칙</a>과 <a href="/privacy" target="_blank">개인정보 안내</a>에 동의합니다.</small></span></label>
-    <button className="sr-primary sr-big sr-sticky-button" disabled={busy || !avatarId || !adult || !terms}>{busy ? "만드는 중…" : "회원가입 끝내기"}<ChevronRight /></button>
+    <label className="sr-check"><input type="checkbox" checked={monitoring} onChange={(e) => setMonitoring(e.target.checked)} /><span><b>대화 저장과 운영 열람 안내를 확인했습니다.</b><small>대화 이어보기와 신고·안전 대응을 위해 대화가 저장되고 권한 있는 관리자가 열람·내보낼 수 있습니다.</small></span></label>
+    <button className="sr-primary sr-big sr-sticky-button" disabled={busy || !adult || !terms || !monitoring}>{busy ? "만드는 중…" : "회원가입 끝내기"}<ChevronRight /></button>
   </form></section>;
 }
 
@@ -202,16 +242,27 @@ function MemberLogin({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit:
   </form></section>;
 }
 
-function Home({ profile, matches, onMatch, onAi, onOpen, onLogout, busy }: { profile: Profile; matches: Match[]; onMatch: () => void; onAi: () => void; onOpen: (m: Match) => void; onLogout: () => void; busy: boolean }) {
-  const live = matches.filter((match) => match.status === "live");
+function Home({ profile, matches, onMatch, onDiscover, onAi, onOpen, onLogout, busy }: { profile: Profile; matches: Match[]; onMatch: () => void; onDiscover: () => void; onAi: () => void; onOpen: (m: Match) => void; onLogout: () => void; busy: boolean }) {
+  const conversations = matches.filter((match) => match.status !== "blocked");
   return <section className="sr-page sr-home"><TopBar title="비밀친구" right={<button className="sr-icon-btn" onClick={onLogout} aria-label="나가기"><LogOut /></button>} />
-    <div className="sr-scroll"><div className="sr-profile-card"><Avatar id={profile.avatar_id} size="lg" /><div><small>내 닉네임</small><h2>{profile.nickname}</h2><span><ShieldCheck /> 성인 확인 완료</span></div></div>
+    <div className="sr-scroll"><div className="sr-profile-card"><Avatar id={profile.avatar_id} photoUrl={profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null} size="lg" /><div><small>내 공개 프로필</small><h2>{profile.nickname}</h2><span>{profile.gender} · {profile.age_band} · {profile.region} · {profile.job}</span></div></div>
       <div className="sr-home-title"><p>지금 누구와</p><h1>이야기할까요?</h1></div>
-      <button className="sr-choice sr-choice-human" onClick={onMatch}><span><UserRoundSearch /></span><div><b>새로운 사람 찾기</b><small>원하는 상대를 고르고 5초면 연결</small></div><ChevronRight /></button>
+      <button className="sr-choice sr-choice-human" onClick={onMatch}><span><UserRoundSearch /></span><div><b>상대 고르기</b><small>조건을 고르고 5초 룰렛으로 연결</small></div><ChevronRight /></button>
+      <button className="sr-choice sr-choice-date" onClick={onDiscover}><span><UsersRound /></span><div><b>공개 데이트 채팅</b><small>공개 프로필을 보고 직접 선택하기</small></div><ChevronRight /></button>
       <button className="sr-choice sr-choice-ai" onClick={onAi} disabled={busy}><span><Bot /></span><div><b>루미 AI와 대화</b><small>기다리지 않고 바로 이야기하기</small></div><ChevronRight /></button>
-      {live.length > 0 && <div className="sr-recent"><h3>이어 할 대화</h3>{live.map((match) => <button key={match.id} onClick={() => onOpen(match)}><Avatar id={match.persona.avatarId} /><div><b>{match.persona.nickname}</b><small>{match.kind === "ai" ? "AI 친구" : "테스트 운영자 대행"} · LIVE</small></div><ChevronRight /></button>)}</div>}
+      {conversations.length > 0 && <div className="sr-recent"><h3>내 대화 · 언제든 이어서 하기</h3>{conversations.map((match) => <button key={match.id} onClick={() => onOpen(match)}><Avatar id={match.persona.avatarId} photoUrl={match.persona.photoUrl} /><div><b>{match.persona.nickname}</b><small>{match.kind === "ai" ? "AI 친구" : `${match.persona.gender} · ${match.persona.ageBand} · ${match.persona.job}`} · 대화 저장됨</small></div><ChevronRight /></button>)}</div>}
       <div className="sr-safety-tip"><ShieldCheck /><p><b>안전하게 이용해 주세요</b><span>전화번호·주소·계좌번호는 보내지 마세요. 불편하면 바로 신고하거나 차단할 수 있어요.</span></p></div>
     </div></section>;
+}
+
+function Discover({ onBack, onOpen, busy }: { onBack: () => void; onOpen: (targetId: string) => void; busy: boolean }) {
+  const [profiles, setProfiles] = useState<Persona[]>([]); const [selected, setSelected] = useState<Persona | null>(null); const [loading, setLoading] = useState(true);
+  useEffect(() => { api<{ profiles: Persona[] }>("/api/random/discover").then((data) => setProfiles(data.profiles)).finally(() => setLoading(false)); }, []);
+  return <section className="sr-page"><TopBar title="공개 데이트 채팅" onBack={onBack} /><div className="sr-scroll">
+    <div className="sr-help-banner"><UsersRound /><p><b>마음에 드는 사람을 누르세요.</b><span>이름과 전화번호는 서로에게 공개되지 않아요.</span></p></div>
+    {loading ? <p className="sr-list-empty">프로필을 불러오는 중…</p> : profiles.length === 0 ? <p className="sr-list-empty">아직 공개된 프로필이 없습니다.</p> : <div className="sr-dating-grid">{profiles.map((person) => <button key={person.userId} onClick={() => setSelected(person)}><Avatar id={person.avatarId} photoUrl={person.photoUrl} size="lg" /><div><b>{person.nickname}</b><small>{person.gender} · {person.ageBand}</small><span>{person.region} · {person.job}</span><em className={person.online ? "online" : ""}>● {person.online ? "접속 가능" : "프로필 공개"}</em></div></button>)}</div>}
+    {selected && <div className="sr-profile-modal"><button className="sr-modal-close" onClick={() => setSelected(null)}><X /></button><Avatar id={selected.avatarId} photoUrl={selected.photoUrl} size="xl" /><h2>{selected.nickname}</h2><p className="sr-profile-facts">{selected.gender} · {selected.ageBand} · {selected.region} · {selected.job}</p><div className="sr-intro-box"><b>자기소개</b><p>{selected.introduction || "등록된 자기소개가 없습니다."}</p></div><button className="sr-primary sr-big" disabled={busy} onClick={() => selected.userId && onOpen(selected.userId)}><MessageCircleHeart /> 이 사람과 채팅하기</button></div>}
+  </div></section>;
 }
 
 function MatchSetup({ onBack, onStart }: { onBack: () => void; onStart: (data: Record<string, string>) => void }) {
@@ -225,7 +276,7 @@ function MatchSetup({ onBack, onStart }: { onBack: () => void; onStart: (data: R
     <div className="sr-select-row"><label>지역<select value={region} onChange={(e) => setRegion(e.target.value)}>{regions.map((v) => <option key={v}>{v}</option>)}</select></label><label>나이대<select value={ageBand} onChange={(e) => setAge(e.target.value)}>{ageBands.map((v) => <option key={v}>{v}</option>)}</select></label></div>
     <label>직업<select value={job} onChange={(e) => setJob(e.target.value)}>{jobs.map((v) => <option key={v}>{v}</option>)}</select></label>
     <fieldset><legend>상대 아바타</legend><AvatarGrid value={avatarId} onChange={setAvatar} filter={gender} /></fieldset>
-    <div className="sr-beta-note"><UsersRound /><p><b>현재는 테스트 버전입니다.</b><span>실제 일반 회원 대신 관리자가 선택된 상대 역할로 답합니다.</span></p></div>
+    <div className="sr-beta-note"><Info /><p><b>대화는 내 대화 목록에 저장됩니다.</b><span>한 번 연결된 사람과 언제든 다시 이야기할 수 있어요.</span></p></div>
     <button className="sr-primary sr-big" onClick={() => onStart({ nickname, gender, region, ageBand, job, avatarId })}><Sparkles /> 5초 룰렛 시작하기</button>
   </div></section>;
 }
@@ -236,8 +287,8 @@ function Roulette() {
   return <section className="sr-roulette"><div className="sr-roulette-glow" /><p>두근두근</p><h1>새로운 친구를<br />찾고 있어요</h1><div className="sr-wheel"><div className="sr-wheel-ring" /><Avatar id={avatars[index].id} size="xl" /><span className="sr-wheel-heart"><Heart /></span></div><div className="sr-search-dots"><i /><i /><i /></div><b>{left > 0 ? `${left}초만 기다려 주세요` : "연결 중이에요"}</b><small>화면을 닫지 마세요.</small></section>;
 }
 
-function Chat({ match, user, admin, onBack, onBlocked, setNotice }: { match: Match; user: User; profile: Profile | null; admin: boolean; onBack: () => void; onBlocked?: () => void; setNotice: (v: string) => void }) {
-  const [messages, setMessages] = useState<Message[]>([]); const [text, setText] = useState(""); const [sending, setSending] = useState(false); const [menu, setMenu] = useState(false);
+function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { match: Match; user: User; profile: Profile | null; admin: boolean; onBack: () => void; onBlocked?: () => void; setNotice: (v: string) => void }) {
+  const [messages, setMessages] = useState<Message[]>([]); const [text, setText] = useState(""); const [sending, setSending] = useState(false); const [menu, setMenu] = useState(false); const [showIntro, setShowIntro] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let socket: WebSocket | null = null; let cancelled = false;
@@ -255,13 +306,16 @@ function Chat({ match, user, admin, onBack, onBlocked, setNotice }: { match: Mat
       await api(path, { method: "POST", body: JSON.stringify({ text: value }) });
     } catch (error) { setText(value); setNotice((error as Error).message); } finally { setSending(false); }
   }
-  return <section className="sr-page sr-chat"><header className="sr-chat-head"><button className="sr-icon-btn" onClick={onBack}><ArrowLeft /></button><Avatar id={match.persona.avatarId} /><div><b>{match.persona.nickname}{match.kind === "ai" && <em>AI</em>}</b><span><i /> LIVE · 지금 연결됨</span></div>{!admin && <button className="sr-more" onClick={() => setMenu(!menu)}>•••</button>}</header>
+  const myPerson = admin ? match.requester : profile ? { nickname: profile.nickname, gender: profile.gender, ageBand: profile.age_band, region: profile.region, job: profile.job, avatarId: profile.avatar_id, photoUrl: profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null } : null;
+  const canReply = !admin || match.mode === "managed" || !match.mode;
+  return <section className="sr-page sr-chat"><header className="sr-chat-head"><div className="sr-chat-nav"><button className="sr-icon-btn" onClick={onBack}><ArrowLeft /></button><strong>비밀 대화</strong>{!admin && <button className="sr-more" onClick={() => setMenu(!menu)}>•••</button>}</div><div className="sr-chat-person"><Avatar id={match.persona.avatarId} photoUrl={match.persona.photoUrl} /><div><small>대화 상대</small><b>{match.persona.nickname}{match.kind === "ai" && <em>AI</em>}</b><span><i /> {match.persona.gender} · {match.persona.ageBand} · {match.persona.job}</span></div><button onClick={() => setShowIntro(!showIntro)}><Eye /> 자기소개</button></div>{myPerson && <div className="sr-chat-person mine"><Avatar id={myPerson.avatarId} photoUrl={myPerson.photoUrl} /><div><small>{admin ? "회원" : "나"}</small><b>{myPerson.nickname}</b><span>{myPerson.gender} · {myPerson.ageBand} · {myPerson.job}</span></div></div>}</header>
     {menu && <div className="sr-chat-menu"><p>불편한 대화인가요?</p><button onClick={async () => { try { await api(`/api/random/matches/${match.id}/report`, { method: "POST", body: JSON.stringify({ reason: "불쾌하거나 부적절한 대화" }) }); setNotice("신고가 접수되었습니다."); setMenu(false); } catch (e) { setNotice((e as Error).message); } }}><Flag /> 신고하기</button><button className="danger" onClick={async () => { if (!confirm("이 대화를 차단하고 끝낼까요?")) return; try { await api(`/api/random/matches/${match.id}/block`, { method: "POST" }); onBlocked?.(); } catch (e) { setNotice((e as Error).message); } }}><X /> 차단하고 끝내기</button></div>}
-    <div className="sr-chat-info">{match.kind === "ai" ? "AI가 답하는 대화입니다." : "베타 테스트: 관리자가 상대 역할로 답합니다."}</div>
+    {showIntro && <div className="sr-chat-intro"><b>{match.persona.nickname}님의 자기소개</b><p>{match.persona.introduction || "등록된 자기소개가 없습니다."}</p></div>}
+    <div className="sr-chat-info">{admin && match.mode === "managed" ? "테스트운영자 대행 · 회원에게 답장할 수 있습니다." : admin ? "모니터링 열람 · 직접 회원 간 대화에는 답장할 수 없습니다." : match.kind === "ai" ? "AI가 답하는 대화입니다. 대화 내용은 저장됩니다." : "대화는 이어보기와 신고·안전 대응을 위해 저장됩니다."}</div>
     <div className="sr-messages"><div className="sr-day">오늘</div>{messages.length === 0 && <div className="sr-empty-chat"><MessageCircleHeart /><b>연결되었어요!</b><span>먼저 “안녕하세요”라고 보내 보세요.</span></div>}{messages.map((message) => {
       const mine = message.senderId === user.id; return <div className={`sr-message ${mine ? "mine" : "theirs"}`} key={message.id}>{!mine && <Avatar id={match.persona.avatarId} size="sm" />}<div>{!mine && <small>{message.author}</small>}<p>{message.text}</p><time>{new Date(message.createdAt).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" })}</time></div></div>;
     })}<div ref={endRef} /></div>
-    <form className="sr-composer" onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="메시지를 입력하세요" maxLength={2000} /><button disabled={!text.trim() || sending} aria-label="보내기"><Send /></button></form>
+    {canReply ? <form className="sr-composer" onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="메시지를 입력하세요" maxLength={2000} /><button disabled={!text.trim() || sending} aria-label="보내기"><Send /></button></form> : <div className="sr-readonly">이 대화는 열람 전용입니다.</div>}
   </section>;
 }
 
@@ -271,9 +325,16 @@ function AdminLogin({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: 
 }
 
 function AdminDashboard({ user, onLogout, setNotice }: { user: User; onLogout: () => void; setNotice: (v: string) => void }) {
-  const [matches, setMatches] = useState<Match[]>([]); const [selected, setSelected] = useState<Match | null>(null); const [loading, setLoading] = useState(true);
-  const load = useCallback(() => api<{ matches: Match[] }>("/api/random/admin/matches").then((d) => setMatches(d.matches)).catch((e) => setNotice(e.message)).finally(() => setLoading(false)), [setNotice]);
-  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, [load]);
+  const [matches, setMatches] = useState<Match[]>([]); const [testProfiles, setTestProfiles] = useState<(Persona & { live?: boolean })[]>([]); const [selected, setSelected] = useState<Match | null>(null); const [loading, setLoading] = useState(true); const [showCreate, setShowCreate] = useState(false);
+  const [nickname, setNickname] = useState(""); const [gender, setGender] = useState("여성"); const [ageBand, setAgeBand] = useState("20대"); const [region, setRegion] = useState("서울"); const [job, setJob] = useState("회사원"); const [introduction, setIntroduction] = useState(""); const [avatarId, setAvatarId] = useState("f1");
+  const load = useCallback(() => Promise.all([api<{ matches: Match[] }>("/api/random/admin/matches"), api<{ profiles: (Persona & { live?: boolean })[] }>("/api/random/admin/test-profiles")]).then(([m, p]) => { setMatches(m.matches); setTestProfiles(p.profiles); }).catch((e) => setNotice(e.message)).finally(() => setLoading(false)), [setNotice]);
+  useEffect(() => { load(); const timer = setInterval(load, 5000); return () => clearInterval(timer); }, [load]);
+  async function createProfile(event: FormEvent) { event.preventDefault(); try { await api("/api/random/admin/test-profiles", { method: "POST", body: JSON.stringify({ nickname, gender, ageBand, region, job, introduction, avatarId }) }); setNickname(""); setIntroduction(""); setShowCreate(false); await load(); setNotice("공개 데이트 프로필을 만들었습니다."); } catch (error) { setNotice((error as Error).message); } }
+  async function downloadExport() { try { const response = await fetch("/api/random/admin/export", { credentials: "include" }); if (!response.ok) throw new Error("대화 내보내기에 실패했습니다."); const blob = await response.blob(); const href = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = href; anchor.download = `theham-chat-export-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(href); } catch (error) { setNotice((error as Error).message); } }
   if (selected) return <Chat match={selected} user={user} profile={null} admin onBack={() => { setSelected(null); load(); }} setNotice={setNotice} />;
-  return <section className="sr-page sr-admin"><TopBar title="대화 관리" right={<button className="sr-icon-btn" onClick={onLogout}><LogOut /></button>} /><div className="sr-scroll"><div className="sr-admin-hero"><ShieldCheck /><div><b>관리자 대행 채팅</b><span>회원이 고른 상대 역할로 답장합니다.</span></div></div><div className="sr-admin-count"><b>LIVE {matches.filter((m) => m.status === "live" && m.kind === "operator").length}</b><button onClick={load}>새로고침</button></div>{loading ? <p className="sr-list-empty">불러오는 중…</p> : matches.filter((m) => m.kind === "operator").length === 0 ? <p className="sr-list-empty">아직 들어온 랜덤 대화가 없습니다.</p> : <div className="sr-admin-list">{matches.filter((m) => m.kind === "operator").map((match) => <button key={match.id} onClick={() => setSelected(match)} disabled={match.status !== "live"}><Avatar id={match.requester?.avatarId} /><div><b>{match.requester?.nickname ?? "회원"} <span>→ {match.persona.nickname} 역할</span></b><small>{match.persona.gender} · {match.persona.region} · {match.persona.ageBand} · {match.persona.job}</small><em>{match.status === "live" ? "● LIVE · 답장하기" : "종료됨"}</em></div><ChevronRight /></button>)}</div>}</div></section>;
+  return <section className="sr-page sr-admin"><TopBar title="마스터 설정" right={<button className="sr-icon-btn" onClick={onLogout}><LogOut /></button>} /><div className="sr-scroll"><div className="sr-admin-hero"><ShieldCheck /><div><b>테스트운영자 대행</b><span>관리 프로필 대화는 답장할 수 있고, 전체 대화는 모니터링·내보내기할 수 있습니다.</span></div></div>
+    <div className="sr-admin-actions"><button onClick={() => setShowCreate(!showCreate)}><Plus /> 임의 회원 만들기</button><button onClick={downloadExport}><Download /> 전체 대화 저장</button></div>
+    {showCreate && <form className="sr-admin-create sr-form" onSubmit={createProfile}><h3>공개 데이트 회원 만들기</h3><label>닉네임<input value={nickname} onChange={(e) => setNickname(e.target.value.slice(0, 10))} minLength={2} maxLength={10} required /></label><div className="sr-select-row"><label>성별<select value={gender} onChange={(e) => setGender(e.target.value)}>{["여성", "남성", "기타", "공개 안 함"].map((v) => <option key={v}>{v}</option>)}</select></label><label>나이<select value={ageBand} onChange={(e) => setAgeBand(e.target.value)}>{profileAges.map((v) => <option key={v}>{v}</option>)}</select></label></div><div className="sr-select-row"><label>지역<select value={region} onChange={(e) => setRegion(e.target.value)}>{profileRegions.map((v) => <option key={v}>{v}</option>)}</select></label><label>직업<select value={job} onChange={(e) => setJob(e.target.value)}>{profileJobs.map((v) => <option key={v}>{v}</option>)}</select></label></div><label>자기소개<textarea value={introduction} onChange={(e) => setIntroduction(e.target.value.slice(0, 240))} minLength={2} maxLength={240} required /></label><AvatarGrid value={avatarId} onChange={setAvatarId} /><button className="sr-primary sr-big">일반 회원처럼 공개하기</button></form>}
+    <div className="sr-admin-section"><h3>내가 만든 공개 회원</h3>{testProfiles.length === 0 ? <p className="sr-list-empty">아직 만든 회원이 없습니다.</p> : <div className="sr-admin-profiles">{testProfiles.map((person) => <div key={person.userId}><Avatar id={person.avatarId} photoUrl={person.photoUrl} /><p><b>{person.nickname}</b><span>{person.gender} · {person.ageBand} · {person.job}</span></p><em className={person.live ? "live" : ""}>● {person.live ? "LIVE" : "대기"}</em></div>)}</div>}</div>
+    <div className="sr-admin-count"><b>LIVE {matches.filter((m) => m.status === "live").length}</b><button onClick={load}>새로고침</button></div>{loading ? <p className="sr-list-empty">불러오는 중…</p> : matches.length === 0 ? <p className="sr-list-empty">아직 대화가 없습니다.</p> : <div className="sr-admin-list">{matches.map((match) => <button key={match.id} onClick={() => setSelected(match)}><Avatar id={match.requester?.avatarId} photoUrl={match.requester?.photoUrl} /><div><b>{match.requester?.nickname ?? "회원"} <span>↔ {match.persona.nickname}</span></b><small>{match.mode === "direct" ? "회원 간 직접 대화 · 열람 전용" : match.kind === "ai" ? "AI 대화" : "관리 프로필 대화 · 답장 가능"}</small><em>{match.status === "live" ? "● LIVE · 열기" : "저장된 대화 · 열기"}</em></div><ChevronRight /></button>)}</div>}</div></section>;
 }
