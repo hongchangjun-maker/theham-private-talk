@@ -292,18 +292,43 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let socket: WebSocket | null = null; let cancelled = false;
-    api<{ messages: Message[] }>(`/api/cloudflare/rooms/${match.roomId}/messages?limit=120`).then((data) => { if (!cancelled) setMessages(data.messages); }).catch((e) => setNotice(e.message));
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    socket = new WebSocket(`${protocol}//${location.host}/api/cloudflare/rooms/${match.roomId}/socket`);
-    socket.onmessage = (event) => { try { const data = JSON.parse(event.data); if (data.type === "message") setMessages((current) => current.some((m) => m.id === data.message.id) ? current : [...current, data.message]); } catch { /* heartbeat */ } };
+    const roomPath = encodeURIComponent(match.roomId);
+    api<{ messages: Message[] }>(`/api/cloudflare/rooms/${roomPath}/messages?limit=120`)
+      .then((data) => { if (!cancelled) setMessages(Array.isArray(data.messages) ? data.messages : []); })
+      .catch((e) => setNotice(e.message));
+    try {
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${protocol}//${location.host}/api/cloudflare/rooms/${roomPath}/socket`);
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as { type?: string; message?: Message };
+          if (data.type !== "message" || !data.message || !data.message.id || !data.message.text) return;
+          const incoming = data.message;
+          setMessages((current) => current.some((m) => m.id === incoming.id) ? current : [...current, incoming]);
+        } catch {
+          // Heartbeats and malformed events do not affect the visible conversation.
+        }
+      };
+    } catch {
+      // Message history and HTTP sending still work when realtime connection is unavailable.
+    }
     return () => { cancelled = true; socket?.close(); };
   }, [match.roomId, setNotice]);
   useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
   async function send(event: FormEvent) {
     event.preventDefault(); const value = text.trim(); if (!value || sending) return; setText(""); setSending(true);
     try {
-      const path = admin ? `/api/random/admin/matches/${match.id}/messages` : match.kind === "ai" ? `/api/random/ai/${match.roomId}/messages` : `/api/cloudflare/rooms/${match.roomId}/messages`;
-      await api(path, { method: "POST", body: JSON.stringify({ text: value }) });
+      const roomPath = encodeURIComponent(match.roomId);
+      const matchPath = encodeURIComponent(match.id);
+      const path = admin ? `/api/random/admin/matches/${matchPath}/messages` : match.kind === "ai" ? `/api/random/ai/${roomPath}/messages` : `/api/cloudflare/rooms/${roomPath}/messages`;
+      const data = await api<{ message?: Message; userMessage?: Message; aiMessage?: Message }>(path, { method: "POST", body: JSON.stringify({ text: value }) });
+      const delivered = [data.message, data.userMessage, data.aiMessage].filter((item): item is Message => Boolean(item?.id && item.text));
+      if (delivered.length > 0) {
+        setMessages((current) => {
+          const known = new Set(current.map((item) => item.id));
+          return [...current, ...delivered.filter((item) => !known.has(item.id))];
+        });
+      }
     } catch (error) { setText(value); setNotice((error as Error).message); } finally { setSending(false); }
   }
   const myPerson = admin ? match.requester : profile ? { nickname: profile.nickname, gender: profile.gender, ageBand: profile.age_band, region: profile.region, job: profile.job, avatarId: profile.avatar_id, photoUrl: profile.photo_key ? `/api/random/profile/photo/${profile.user_id}` : null } : null;
@@ -312,8 +337,13 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
     {menu && <div className="sr-chat-menu"><p>불편한 대화인가요?</p><button onClick={async () => { try { await api(`/api/random/matches/${match.id}/report`, { method: "POST", body: JSON.stringify({ reason: "불쾌하거나 부적절한 대화" }) }); setNotice("신고가 접수되었습니다."); setMenu(false); } catch (e) { setNotice((e as Error).message); } }}><Flag /> 신고하기</button><button className="danger" onClick={async () => { if (!confirm("이 대화를 차단하고 끝낼까요?")) return; try { await api(`/api/random/matches/${match.id}/block`, { method: "POST" }); onBlocked?.(); } catch (e) { setNotice((e as Error).message); } }}><X /> 차단하고 끝내기</button></div>}
     {showIntro && <div className="sr-chat-intro"><b>{match.persona.nickname}님의 자기소개</b><p>{match.persona.introduction || "등록된 자기소개가 없습니다."}</p></div>}
     <div className="sr-chat-info">{admin && match.mode === "managed" ? "관리 프로필 대화 · 회원에게 답장할 수 있습니다." : admin ? "대화 기록 확인 · 직접 회원 간 대화에는 답장할 수 없습니다." : match.kind === "ai" ? "AI가 답하는 대화입니다. 개인정보를 보내지 마세요." : "전화번호·주소·계좌번호는 보내지 마세요. 불편하면 신고하거나 차단하세요."}</div>
-    <div className="sr-messages"><div className="sr-day">오늘</div>{messages.length === 0 && <div className="sr-empty-chat"><MessageCircleHeart /><b>연결되었어요!</b><span>먼저 “안녕하세요”라고 보내 보세요.</span></div>}{messages.map((message) => {
-      const mine = message.senderId === user.id; return <div className={`sr-message ${mine ? "mine" : "theirs"}`} key={message.id}>{!mine && <Avatar id={match.persona.avatarId} size="sm" />}<div>{!mine && <small>{message.author}</small>}<p>{message.text}</p><time>{new Date(message.createdAt).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" })}</time></div></div>;
+    <div className="sr-messages"><div className="sr-day">오늘</div>{messages.length === 0 && <div className="sr-empty-chat"><MessageCircleHeart /><b>연결되었어요!</b><span>먼저 “안녕하세요”라고 보내 보세요.</span></div>}{messages.map((message, index) => {
+      const mine = message.senderId === user.id;
+      const messageId = message.id || `message-${index}`;
+      return <div className={`sr-message ${mine ? "mine" : "theirs"}`} key={messageId}>
+        {!mine && <Avatar id={match.persona.avatarId} size="sm" />}
+        <div>{!mine && <small>{message.author || "상대"}</small>}<p>{message.text}</p><time>{new Date(message.createdAt).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" })}</time></div>
+      </div>;
     })}<div ref={endRef} /></div>
     {canReply ? <form className="sr-composer" onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="메시지를 입력하세요" maxLength={2000} /><button disabled={!text.trim() || sending} aria-label="보내기"><Send /></button></form> : <div className="sr-readonly">이 대화는 열람 전용입니다.</div>}
   </section>;
