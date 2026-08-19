@@ -7,7 +7,7 @@ import {
   ImagePlus, Info, LockKeyhole, LogOut, MessageCircleHeart, Plus, Send, ShieldCheck, Sparkles,
   UserRoundSearch, UsersRound, X,
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Component, ErrorInfo, FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 type User = { id: string; display_name: string; role: "member" | "admin" | "super_admin"; status: string };
 type Profile = { user_id: string; nickname: string; avatar_id: string; gender: string; age_band: string; region: string; job: string; introduction: string; photo_key?: string | null };
@@ -15,6 +15,46 @@ type Persona = { userId?: string; nickname: string; gender: string; region: stri
 type Match = { id: string; roomId: string; kind: "operator" | "ai"; mode?: "managed" | "direct" | "ai"; status: string; createdAt: string; lastMessageAt?: string | null; persona: Persona; requester?: Persona };
 type Message = { id: string; roomId: string; senderId: string; author: string; text: string; createdAt: string };
 type Screen = "loading" | "welcome" | "signup" | "login" | "home" | "match" | "discover" | "roulette" | "chat" | "admin-login" | "admin";
+
+function normalizeMessage(value: unknown): Message | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<Message>;
+  const id = String(item.id ?? "").trim();
+  const text = String(item.text ?? "").trim();
+  if (!id || !text) return null;
+  return {
+    id,
+    roomId: String(item.roomId ?? ""),
+    senderId: String(item.senderId ?? ""),
+    author: String(item.author ?? "상대"),
+    text,
+    createdAt: String(item.createdAt ?? new Date().toISOString()),
+  };
+}
+
+function messageTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "방금" : date.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
+}
+
+class ScreenErrorBoundary extends Component<{ children: ReactNode; onReset: () => void }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Chat screen render failed", error, info);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <section className="sr-page sr-recovery"><MessageCircleHeart /><h2>화면을 다시 불러올게요</h2><p>대화 내용은 지워지지 않았습니다.</p><button className="sr-primary sr-big" onClick={this.props.onReset}>대화 목록으로 돌아가기</button></section>;
+    }
+    return this.props.children;
+  }
+}
 
 const avatars = [
   { id: "f1", src: "/avatars/f1.webp", label: "우아한 스타일", gender: "여성" },
@@ -122,9 +162,10 @@ export function SecretRouletteApp() {
         <div className="sr-status"><span>전국비밀채팅</span><span className="sr-status-live">● 안전 연결</span></div>
         <div className="sr-screen">
           {notice && <div className="sr-toast" role="status">{notice}<button onClick={() => setNotice("")}><X /></button></div>}
-          {screen === "loading" && <Loading />}
-          {screen === "welcome" && <Welcome onSignup={() => setScreen("signup")} onLogin={() => setScreen("login")} onAdmin={() => setScreen("admin-login")} />}
-          {screen === "signup" && <Signup busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (payload, photo) => {
+          <ScreenErrorBoundary key={screen} onReset={() => { setActiveMatch(null); setNotice(""); setScreen(user?.role === "member" && profile ? "home" : user ? "admin" : "welcome"); }}>
+            {screen === "loading" && <Loading />}
+            {screen === "welcome" && <Welcome onSignup={() => setScreen("signup")} onLogin={() => setScreen("login")} onAdmin={() => setScreen("admin-login")} />}
+            {screen === "signup" && <Signup busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (payload, photo) => {
             setBusy(true); setNotice("");
             try {
               const data = await api<{ user: User; profile: Profile }>("/api/random/signup", { method: "POST", body: JSON.stringify(payload) });
@@ -135,27 +176,27 @@ export function SecretRouletteApp() {
               }
               setUser(data.user); setProfile(nextProfile); setMatches([]); setScreen("home");
             } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
-          }} />}
-          {screen === "login" && <MemberLogin busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (name, phoneLast4) => {
+            }} />}
+            {screen === "login" && <MemberLogin busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (name, phoneLast4) => {
             setBusy(true); setNotice("");
             try {
               const data = await api<{ user: User; profile: Profile }>("/api/random/login", { method: "POST", body: JSON.stringify({ name, phoneLast4 }) });
               setUser(data.user); setProfile(data.profile); await loadMatches(); setScreen("home");
             } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
-          }} />}
-          {screen === "home" && profile && <Home profile={profile} matches={matches} onMatch={() => setScreen("match")} onDiscover={() => setScreen("discover")} onAi={async () => {
+            }} />}
+            {screen === "home" && profile && <Home profile={profile} matches={matches} onMatch={() => setScreen("match")} onDiscover={() => setScreen("discover")} onAi={async () => {
             setBusy(true); setNotice("");
             try { const data = await api<{ match: Match }>("/api/random/ai/start", { method: "POST" }); await loadMatches(); openChat(data.match); }
             catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
-          }} onOpen={openChat} onLogout={logout} busy={busy} />}
-          {screen === "discover" && <Discover onBack={() => setScreen("home")} onOpen={async (targetId) => {
+            }} onOpen={openChat} onLogout={logout} busy={busy} />}
+            {screen === "discover" && <Discover onBack={() => setScreen("home")} onOpen={async (targetId) => {
             setBusy(true); setNotice("");
             try {
               const data = await api<{ match: Match }>(`/api/random/direct/${targetId}`, { method: "POST" });
               await loadMatches(); openChat(data.match);
             } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
-          }} busy={busy} />}
-          {screen === "match" && <MatchSetup onBack={() => setScreen("home")} onStart={async (preferences) => {
+            }} busy={busy} />}
+            {screen === "match" && <MatchSetup onBack={() => setScreen("home")} onStart={async (preferences) => {
             setScreen("roulette"); setNotice("");
             try {
               const [data] = await Promise.all([
@@ -164,15 +205,16 @@ export function SecretRouletteApp() {
               ]);
               setActiveMatch(data.match); await loadMatches(); setScreen("chat");
             } catch (error) { setNotice((error as Error).message); setScreen("match"); }
-          }} />}
-          {screen === "roulette" && <Roulette />}
-          {screen === "chat" && activeMatch && user && <Chat match={activeMatch} user={user} profile={profile} admin={false} onBack={async () => { await loadMatches().catch(() => undefined); setScreen("home"); }} onBlocked={() => { setActiveMatch(null); loadMatches().catch(() => undefined); setScreen("home"); }} setNotice={setNotice} />}
-          {screen === "admin-login" && <AdminLogin busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (pin) => {
+            }} />}
+            {screen === "roulette" && <Roulette />}
+            {screen === "chat" && activeMatch && user && <Chat match={activeMatch} user={user} profile={profile} admin={false} onBack={async () => { await loadMatches().catch(() => undefined); setScreen("home"); }} onBlocked={() => { setActiveMatch(null); loadMatches().catch(() => undefined); setScreen("home"); }} setNotice={setNotice} />}
+            {screen === "admin-login" && <AdminLogin busy={busy} onBack={() => setScreen("welcome")} onSubmit={async (pin) => {
             setBusy(true); setNotice("");
             try { const data = await api<{ user: User }>("/api/cloudflare/master-login", { method: "POST", body: JSON.stringify({ pin }) }); setUser(data.user); setScreen("admin"); }
             catch (error) { setNotice((error as Error).message); } finally { setBusy(false); }
-          }} />}
-          {screen === "admin" && user && <AdminDashboard user={user} onLogout={logout} setNotice={setNotice} />}
+            }} />}
+            {screen === "admin" && user && <AdminDashboard user={user} onLogout={logout} setNotice={setNotice} />}
+          </ScreenErrorBoundary>
         </div>
         <div className="sr-home-indicator" />
       </div>
@@ -289,21 +331,21 @@ function Roulette() {
 
 function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { match: Match; user: User; profile: Profile | null; admin: boolean; onBack: () => void; onBlocked?: () => void; setNotice: (v: string) => void }) {
   const [messages, setMessages] = useState<Message[]>([]); const [text, setText] = useState(""); const [sending, setSending] = useState(false); const [menu, setMenu] = useState(false); const [showIntro, setShowIntro] = useState(false);
-  const endRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let socket: WebSocket | null = null; let cancelled = false;
     const roomPath = encodeURIComponent(match.roomId);
     api<{ messages: Message[] }>(`/api/cloudflare/rooms/${roomPath}/messages?limit=120`)
-      .then((data) => { if (!cancelled) setMessages(Array.isArray(data.messages) ? data.messages : []); })
+      .then((data) => { if (!cancelled) setMessages(Array.isArray(data.messages) ? data.messages.map(normalizeMessage).filter((item): item is Message => Boolean(item)) : []); })
       .catch((e) => setNotice(e.message));
     try {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocket(`${protocol}//${location.host}/api/cloudflare/rooms/${roomPath}/socket`);
       socket.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as { type?: string; message?: Message };
-          if (data.type !== "message" || !data.message || !data.message.id || !data.message.text) return;
-          const incoming = data.message;
+          const data = JSON.parse(event.data) as { type?: string; message?: unknown };
+          const incoming = data.type === "message" ? normalizeMessage(data.message) : null;
+          if (!incoming) return;
           setMessages((current) => current.some((m) => m.id === incoming.id) ? current : [...current, incoming]);
         } catch {
           // Heartbeats and malformed events do not affect the visible conversation.
@@ -314,7 +356,12 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
     }
     return () => { cancelled = true; socket?.close(); };
   }, [match.roomId, setNotice]);
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => {
+    const list = messagesRef.current;
+    if (!list) return;
+    const frame = requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+    return () => cancelAnimationFrame(frame);
+  }, [messages]);
   async function send(event: FormEvent) {
     event.preventDefault(); const value = text.trim(); if (!value || sending) return; setText(""); setSending(true);
     try {
@@ -322,7 +369,7 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
       const matchPath = encodeURIComponent(match.id);
       const path = admin ? `/api/random/admin/matches/${matchPath}/messages` : match.kind === "ai" ? `/api/random/ai/${roomPath}/messages` : `/api/cloudflare/rooms/${roomPath}/messages`;
       const data = await api<{ message?: Message; userMessage?: Message; aiMessage?: Message }>(path, { method: "POST", body: JSON.stringify({ text: value }) });
-      const delivered = [data.message, data.userMessage, data.aiMessage].filter((item): item is Message => Boolean(item?.id && item.text));
+      const delivered = [data.message, data.userMessage, data.aiMessage].map(normalizeMessage).filter((item): item is Message => Boolean(item));
       if (delivered.length > 0) {
         setMessages((current) => {
           const known = new Set(current.map((item) => item.id));
@@ -337,14 +384,14 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
     {menu && <div className="sr-chat-menu"><p>불편한 대화인가요?</p><button onClick={async () => { try { await api(`/api/random/matches/${match.id}/report`, { method: "POST", body: JSON.stringify({ reason: "불쾌하거나 부적절한 대화" }) }); setNotice("신고가 접수되었습니다."); setMenu(false); } catch (e) { setNotice((e as Error).message); } }}><Flag /> 신고하기</button><button className="danger" onClick={async () => { if (!confirm("이 대화를 차단하고 끝낼까요?")) return; try { await api(`/api/random/matches/${match.id}/block`, { method: "POST" }); onBlocked?.(); } catch (e) { setNotice((e as Error).message); } }}><X /> 차단하고 끝내기</button></div>}
     {showIntro && <div className="sr-chat-intro"><b>{match.persona.nickname}님의 자기소개</b><p>{match.persona.introduction || "등록된 자기소개가 없습니다."}</p></div>}
     <div className="sr-chat-info">{admin && match.mode === "managed" ? "관리 프로필 대화 · 회원에게 답장할 수 있습니다." : admin ? "대화 기록 확인 · 직접 회원 간 대화에는 답장할 수 없습니다." : match.kind === "ai" ? "AI가 답하는 대화입니다. 개인정보를 보내지 마세요." : "전화번호·주소·계좌번호는 보내지 마세요. 불편하면 신고하거나 차단하세요."}</div>
-    <div className="sr-messages"><div className="sr-day">오늘</div>{messages.length === 0 && <div className="sr-empty-chat"><MessageCircleHeart /><b>연결되었어요!</b><span>먼저 “안녕하세요”라고 보내 보세요.</span></div>}{messages.map((message, index) => {
+    <div className="sr-messages" ref={messagesRef}><div className="sr-day">오늘</div>{messages.length === 0 && <div className="sr-empty-chat"><MessageCircleHeart /><b>연결되었어요!</b><span>먼저 “안녕하세요”라고 보내 보세요.</span></div>}{messages.map((message, index) => {
       const mine = message.senderId === user.id;
       const messageId = message.id || `message-${index}`;
       return <div className={`sr-message ${mine ? "mine" : "theirs"}`} key={messageId}>
         {!mine && <Avatar id={match.persona.avatarId} size="sm" />}
-        <div>{!mine && <small>{message.author || "상대"}</small>}<p>{message.text}</p><time>{new Date(message.createdAt).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" })}</time></div>
+        <div>{!mine && <small>{message.author || "상대"}</small>}<p>{message.text}</p><time>{messageTime(message.createdAt)}</time></div>
       </div>;
-    })}<div ref={endRef} /></div>
+    })}</div>
     {canReply ? <form className="sr-composer" onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="메시지를 입력하세요" maxLength={2000} /><button disabled={!text.trim() || sending} aria-label="보내기"><Send /></button></form> : <div className="sr-readonly">이 대화는 열람 전용입니다.</div>}
   </section>;
 }

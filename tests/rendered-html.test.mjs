@@ -29,6 +29,9 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.doesNotMatch(component, /테스트\s*운영자 대행|모니터링|감시/);
   assert.match(component, /신고하기/);
   assert.match(component, /차단하고 끝내기/);
+  assert.match(component, /class ScreenErrorBoundary/);
+  assert.match(component, /list\.scrollTop = list\.scrollHeight/);
+  assert.doesNotMatch(component, /scrollIntoView/);
   assert.doesNotMatch(component, /실시간 대화 현황|지금 대화를 기다리는 회원이 없습니다/);
   assert.match(layout, /lang="ko"/);
   assert.doesNotMatch(component, /codex-preview|Starter Project|Your site is taking shape/);
