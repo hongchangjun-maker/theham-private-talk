@@ -2,8 +2,8 @@
 
 ## 최초 설치
 
-1. Supabase Auth Admin API를 사용해 최초 관리자 계정을 만듭니다.
-2. 서버 권한으로 해당 사용자의 `profiles.role`을 `super_admin`, `account_status`를 `active`로 설정합니다.
+1. 임시 `BOOTSTRAP_TOKEN` Worker secret을 설정하고 `/api/cloudflare/bootstrap`을 한 번 호출해 최초 최고관리자를 만듭니다.
+2. 최고관리자 생성 직후 `BOOTSTRAP_TOKEN` secret을 삭제합니다.
 3. 브라우저 코드, SQL seed, 문서에 관리자 비밀번호를 기록하지 않습니다.
 4. 관리자 로그인에 MFA를 적용하고 허용 IP가 정해져 있다면 Cloudflare Access 또는 WAF 정책을 추가합니다.
 
@@ -18,7 +18,7 @@
 
 - 계정 정지, 강제 로그아웃, 역할 변경은 모두 서버에서 권한을 다시 확인합니다.
 - 역할 변경과 계정 상태 변경은 `audit_logs`에 이전 값, 새 값, 대상, 요청 ID를 남깁니다.
-- `read_only_admin`은 어떤 데이터도 변경할 수 없도록 API에서도 차단합니다.
+- 일반 회원은 관리자 API를 호출할 수 없도록 Worker에서 차단합니다.
 
 ## 채팅방과 회의
 

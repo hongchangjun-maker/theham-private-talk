@@ -2,13 +2,13 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "THEHAM PRIVATE TALK",
-  description: "초대받은 구성원을 위한 비공개 채팅·영상회의 플랫폼",
-  applicationName: "THEHAM PRIVATE TALK",
+  title: "전국비밀채팅",
+  description: "AI와 새로운 성인 친구를 만나는 안전한 비밀채팅",
+  applicationName: "전국비밀채팅",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "PRIVATE TALK",
+    title: "전국비밀채팅",
     statusBarStyle: "black-translucent",
   },
   icons: {
@@ -16,15 +16,15 @@ export const metadata: Metadata = {
     apple: "/icon-192.svg",
   },
   openGraph: {
-    title: "THEHAM PRIVATE TALK",
-    description: "대화와 회의를 하나의 안전한 공간에서",
+    title: "전국비밀채팅",
+    description: "AI와 새로운 성인 친구를 만나는 안전한 비밀채팅",
     type: "website",
-    images: [{ url: "/og.png", width: 1672, height: 941, alt: "THEHAM PRIVATE TALK" }],
+    images: [{ url: "/og.png", width: 1672, height: 941, alt: "전국비밀채팅" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "THEHAM PRIVATE TALK",
-    description: "대화와 회의를 하나의 안전한 공간에서",
+    title: "전국비밀채팅",
+    description: "AI와 새로운 성인 친구를 만나는 안전한 비밀채팅",
     images: ["/og.png"],
   },
 };
@@ -33,7 +33,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#21151B",
+  themeColor: "#EF476F",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

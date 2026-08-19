@@ -15,8 +15,8 @@ const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_date: "2026-07-31",
   compatibility_flags: ["nodejs_compat"],
-  assets: {
-    run_worker_first: ["/api/*"],
+  images: {
+    binding: "IMAGES",
   },
   d1_databases: d1
     ? [
@@ -35,6 +35,20 @@ const localBindingConfig = {
         },
       ]
     : [],
+  durable_objects: {
+    bindings: [
+      {
+        name: "CHAT_ROOMS",
+        class_name: "ChatRoom",
+      },
+    ],
+  },
+  migrations: [
+    {
+      tag: "v1",
+      new_sqlite_classes: ["ChatRoom"],
+    },
+  ],
 };
 
 export default defineConfig(async () => {
@@ -45,7 +59,8 @@ export default defineConfig(async () => {
   process.env.MINIFLARE_REGISTRY_PATH ??= ".wrangler/registry";
 
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
-  const { cloudflare } = await import("@cloudflare/vite-plugin");
+  const uiOnly = process.env.LOCAL_UI_ONLY === "1";
+  const cloudflarePlugin = uiOnly ? null : (await import("@cloudflare/vite-plugin")).cloudflare;
 
   return {
     server: isCodexSeatbeltSandbox
@@ -54,10 +69,10 @@ export default defineConfig(async () => {
     plugins: [
       vinext(),
       sites(),
-      cloudflare({
+      ...(cloudflarePlugin ? [cloudflarePlugin({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         config: localBindingConfig,
-      }),
+      })] : []),
     ],
   };
 });

@@ -2,57 +2,140 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function worker() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  return (await import(workerUrl.href)).default;
-}
-
-const env = {
-  ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
-};
-const ctx = { waitUntil() {}, passThroughOnException() {} };
-
-test("server-renders branded Korean login experience", async () => {
-  const app = await worker();
-  const response = await app.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), env, ctx);
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-  const html = await response.text();
-  assert.match(html, /THEHAM PRIVATE TALK/);
-  assert.match(html, /대화와 회의를 하나의 안전한 공간에서/);
-  assert.match(html, /lang="ko"/);
-  assert.doesNotMatch(html, /codex-preview|Starter Project|Your site is taking shape/);
+test("source contains beginner-first signup, roulette, AI, and admin entrances", async () => {
+  const [component, layout] = await Promise.all([
+    readFile(new URL("../components/SecretRouletteApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(component, /전국비밀채팅/);
+  assert.match(component, /phoneNumber/);
+  assert.match(component, /전화번호 전체/);
+  assert.match(component, /전화번호 끝 4자리/);
+  assert.match(component, /대화했던 사람과 다시 대화하고 싶으시면 즐겨찾기,채팅 시간을 약속하시기 바랍니다/);
+  assert.match(component, /채팅 닉네임.*maxLength=\{10\}/);
+  assert.match(component, /2~10글자/);
+  assert.match(component, /JSON\.stringify\(\{ name, phoneLast4 \}\)/);
+  assert.doesNotMatch(component, /예: 홍길동|예: 6085|예: 봄바람|placeholder="숫자 4자리"/);
+  assert.match(component, /마스터 관리자/);
+  assert.match(component, /autoComplete="current-password"/);
+  assert.match(component, /minLength=\{8\} maxLength=\{64\}/);
+  assert.doesNotMatch(component, /placeholder="숫자 비밀번호"/);
+  assert.match(component, /5초 룰렛 시작하기/);
+  assert.match(component, /루미 AI와 대화/);
+  assert.match(component, /공개 데이트 채팅/);
+  assert.match(component, /간단한 자기소개/);
+  assert.match(component, /안전하고 예의 있게 대화하겠습니다/);
+  assert.match(component, /전화번호·주소·계좌번호는 보내지 마세요/);
+  assert.match(component, /전체 대화 저장/);
+  assert.match(component, /내가 만든 공개회원 대기실/);
+  assert.match(component, /내가 맡은 공개회원/);
+  assert.match(component, /현재 .* 역할로 답장합니다/);
+  assert.match(component, /setInterval\(\(\) => \{ void syncHistory\(false\); \}, 1500\)/);
+  assert.match(component, /LIVE를 종료했습니다/);
+  assert.match(component, /불필요한 LIVE 대화방을 삭제했습니다/);
+  assert.match(component, /채팅 준비가 끝났어요/);
+  assert.match(component, /setInterval\(\(\) => \{ void load\(\); \}, 2000\)/);
+  assert.match(component, /회원이 채팅방에 들어오면 자동으로 불이 켜집니다/);
+  assert.match(component, /optimizeChatImage/);
+  assert.match(component, /capture="environment"/);
+  assert.match(component, /onDragEnter=\{onDragEnter\}/);
+  assert.match(component, /사진은 자동으로 저용량으로 줄어듭니다/);
+  assert.match(component, /\/api\/cloudflare\/rooms\/\$\{roomPath\}\/images/);
+  assert.match(component, /attachmentId.*view=inline/s);
+  assert.match(component, /대화 내용과 사진은 그대로 보관됩니다/);
+  assert.match(component, /관계레벨/);
+  assert.match(component, /어색함.*친해짐.*스킨십.*키스.*러브/);
+  assert.match(component, /이 사람 매너\(호감도\)/);
+  assert.match(component, /관계레벨 UP!/);
+  assert.match(component, /playRelationshipFanfare/);
+  assert.doesNotMatch(component, /테스트\s*운영자 대행|모니터링|감시/);
+  assert.match(component, /신고하기/);
+  assert.match(component, /차단하고 끝내기/);
+  assert.match(component, /class ScreenErrorBoundary/);
+  assert.match(component, /list\.scrollTop = list\.scrollHeight/);
+  assert.doesNotMatch(component, /scrollIntoView/);
+  assert.doesNotMatch(component, /실시간 대화 현황|지금 대화를 기다리는 회원이 없습니다/);
+  assert.match(layout, /lang="ko"/);
+  assert.doesNotMatch(component, /codex-preview|Starter Project|Your site is taking shape/);
 });
 
-test("status endpoint never reports absent integrations as connected", async () => {
-  const app = await worker();
-  const response = await app.fetch(new Request("http://localhost/api/status"), env, ctx);
-  assert.equal(response.status, 200);
-  const data = await response.json();
-  assert.equal(data.ok, true);
-  assert.deepEqual(data.integrations, { supabase: false, video: false, storage: false, webPush: false });
+test("Worker owns signup, random matching, realtime chat, AI, and moderation routes", async () => {
+  const source = await readFile(new URL("../worker/index.ts", import.meta.url), "utf8");
+  assert.match(source, /backend: "cloudflare"/);
+  assert.match(source, /\/api\/random\/signup/);
+  assert.match(source, /\/api\/random\/matches/);
+  assert.match(source, /\/api\/random\/discover/);
+  assert.match(source, /\/api\/random\/profile\/photo/);
+  assert.match(source, /\/api\/random\/admin\/test-profiles/);
+  assert.match(source, /\/api\/random\/admin\/export/);
+  assert.doesNotMatch(source, /\/api\/random\/(activity|presence)/);
+  assert.match(source, /env\.AI\.run/);
+  assert.match(source, /\/api\/cloudflare\/master-login/);
+  assert.match(source, /env\.MASTER_PIN/);
+  assert.match(source, /pin\.length < 8 \|\| pin\.length > 64/);
+  assert.match(source, /env\.PHONE_HASH_PEPPER/);
+  assert.match(source, /\{2,10\}/);
+  assert.match(source, /hostname\.endsWith\("\.chatgpt\.site"\)/);
+  assert.match(source, /class ChatRoom extends DurableObject/);
+  assert.match(source, /managed_chat\.ended/);
+  assert.match(source, /managed_chat\.deleted/);
+  assert.match(source, /종료된 대화방에는 메시지를 보낼 수 없습니다/);
+  assert.match(source, /WHERE m\.status = 'live'/);
+  assert.match(source, /차단한 상대와는 새 대화를 시작할 수 없습니다/);
+  assert.match(source, /MAX_CHAT_IMAGE_BYTES/);
+  assert.match(source, /const chatImageMatch = url\.pathname\.match/);
+  assert.match(source, /chatImageMatch && request\.method === "POST"/);
+  assert.match(source, /message_type TEXT NOT NULL DEFAULT 'text'/);
+  assert.match(source, /chat-images\/\$\{roomId\}/);
+  assert.match(source, /chat\.image_uploaded/);
+  assert.match(source, /relationshipPointsFor/);
+  assert.match(source, /relationshipMatch = url\.pathname\.match/);
+  assert.match(source, /ratingMatch = url\.pathname\.match/);
+  assert.match(source, /chat\.rating_saved/);
+  assert.match(source, /url\.searchParams\.get\("view"\) === "inline"/);
+  assert.match(source, /WHERE m\.requester_id = \? OR \(m\.mode = 'direct' AND m\.target_user_id = \?\)/);
+  assert.match(source, /userId: row\.target_user_id/);
+  assert.match(source, /HttpOnly; Secure; SameSite=Lax/);
 });
 
-test("PWA manifest and service worker are production branded", async () => {
+test("PWA manifest and service worker use the new product branding", async () => {
   const [manifest, sw] = await Promise.all([
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
   ]);
   const parsed = JSON.parse(manifest);
-  assert.equal(parsed.name, "THEHAM PRIVATE TALK");
+  assert.equal(parsed.name, "전국비밀채팅");
+  assert.equal(parsed.short_name, "전국비밀채팅");
   assert.equal(parsed.display, "standalone");
-  assert.match(sw, /private-talk-shell-v1/);
+  assert.match(sw, /national-secret-chat-shell-v8-rebrand/);
+  assert.match(sw, /pathname\.startsWith\("\/api\/"\)/);
 });
 
-test("Supabase migrations enable RLS and keep token hashes only", async () => {
-  const [schema, policies] = await Promise.all([
-    readFile(new URL("../supabase/migrations/0001_initial_schema.sql", import.meta.url), "utf8"),
-    readFile(new URL("../supabase/migrations/0002_rls_policies.sql", import.meta.url), "utf8"),
+test("Cloudflare schema hashes access data and provides moderation tables", async () => {
+  const [schema, randomChatMigration, phoneIdentityMigration, datingMigration, presenceMigration, relationshipMigration] = await Promise.all([
+    readFile(new URL("../migrations/0001_cloudflare_core.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0003_secret_roulette.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0004_phone_identity.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0005_dating_profiles_and_monitoring.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0006_live_chat_presence.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0007_relationship_and_ratings.sql", import.meta.url), "utf8"),
   ]);
-  assert.match(schema, /invite_token_hash text not null unique/i);
-  assert.doesNotMatch(schema, /invite_token text/i);
-  assert.match(policies, /alter table public\.messages enable row level security/i);
-  assert.match(policies, /public\.is_room_member\(room_id\)/i);
-  assert.match(policies, /public\.is_admin\(\)/i);
+  assert.match(schema, /token_hash TEXT PRIMARY KEY/i);
+  assert.doesNotMatch(schema, /\btoken TEXT\b/i);
+  assert.match(randomChatMigration, /phone_last4_hash TEXT NOT NULL/i);
+  assert.doesNotMatch(randomChatMigration, /phone_last4 TEXT/i);
+  assert.match(randomChatMigration, /CREATE TABLE IF NOT EXISTS random_matches/i);
+  assert.match(randomChatMigration, /CREATE TABLE IF NOT EXISTS chat_reports/i);
+  assert.match(phoneIdentityMigration, /phone_number_hash TEXT/i);
+  assert.match(phoneIdentityMigration, /login_key_hash TEXT/i);
+  assert.match(datingMigration, /introduction TEXT/i);
+  assert.match(datingMigration, /is_test_profile INTEGER/i);
+  assert.match(datingMigration, /target_user_id TEXT/i);
+  assert.match(datingMigration, /last_message_at TEXT/i);
+  assert.match(presenceMigration, /CREATE TABLE IF NOT EXISTS chat_presence/i);
+  assert.match(presenceMigration, /CHECK \(state IN \('waiting'\)\)/i);
+  assert.match(relationshipMigration, /relationship_points/i);
+  assert.match(relationshipMigration, /relationship_level/i);
+  assert.match(relationshipMigration, /CREATE TABLE IF NOT EXISTS chat_ratings/i);
+  assert.match(relationshipMigration, /CHECK \(score BETWEEN 1 AND 5\)/i);
 });
