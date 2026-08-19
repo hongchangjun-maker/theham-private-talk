@@ -658,50 +658,6 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
     return json({ authenticated: Boolean(user), user, profile });
   }
 
-  if (url.pathname === "/api/random/activity" && request.method === "GET") {
-    const waitingCutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    const chattingCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-    const [waitingMen, waitingOthers, chatting] = await Promise.all([
-      env.DB.prepare(`
-        SELECT p.nickname
-        FROM chat_presence a
-        JOIN chat_profiles p ON p.user_id = a.user_id
-        JOIN users u ON u.id = a.user_id
-        WHERE a.state = 'waiting' AND a.updated_at > ? AND p.gender = '남성'
-          AND p.is_discoverable = 1 AND p.is_test_profile = 0 AND u.status = 'active'
-        ORDER BY RANDOM() LIMIT 6
-      `).bind(waitingCutoff).all<{ nickname: string }>(),
-      env.DB.prepare(`
-        SELECT p.nickname
-        FROM chat_presence a
-        JOIN chat_profiles p ON p.user_id = a.user_id
-        JOIN users u ON u.id = a.user_id
-        WHERE a.state = 'waiting' AND a.updated_at > ? AND p.gender != '남성'
-          AND p.is_discoverable = 1 AND p.is_test_profile = 0 AND u.status = 'active'
-        ORDER BY RANDOM() LIMIT 2
-      `).bind(waitingCutoff).all<{ nickname: string }>(),
-      env.DB.prepare(`
-        SELECT rp.nickname AS requester_nickname, tp.nickname AS target_nickname
-        FROM random_matches m
-        JOIN chat_profiles rp ON rp.user_id = m.requester_id
-        JOIN chat_profiles tp ON tp.user_id = m.target_user_id
-        JOIN users ru ON ru.id = m.requester_id
-        JOIN users tu ON tu.id = m.target_user_id
-        WHERE m.status = 'live' AND m.mode = 'direct' AND m.last_message_at > ?
-          AND rp.is_discoverable = 1 AND tp.is_discoverable = 1
-          AND rp.is_test_profile = 0 AND tp.is_test_profile = 0
-          AND ru.status = 'active' AND tu.status = 'active'
-        ORDER BY m.last_message_at DESC LIMIT 4
-      `).bind(chattingCutoff).all<{ requester_nickname: string; target_nickname: string }>(),
-    ]);
-    const activities = [
-      ...waitingMen.results.map((row) => ({ kind: "waiting", text: `${row.nickname}님이 대화 대기 중` })),
-      ...waitingOthers.results.map((row) => ({ kind: "waiting", text: `${row.nickname}님이 대화 대기 중` })),
-      ...chatting.results.map((row) => ({ kind: "chatting", text: `${row.requester_nickname}님과 ${row.target_nickname}님이 대화 중` })),
-    ].sort(() => Math.random() - 0.5);
-    return json({ activities, generatedAt: new Date().toISOString() });
-  }
-
   if (url.pathname === "/api/random/signup" && request.method === "POST") {
     const body = await readJsonBody<{
       name?: unknown; phoneNumber?: unknown; nickname?: unknown; avatarId?: unknown;
@@ -960,8 +916,6 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
   if (url.pathname === "/api/cloudflare/logout" && request.method === "POST") {
     const token = cookieValue(request, SESSION_COOKIE);
     if (token) {
-      const exitingUser = await currentUser(request, env);
-      if (exitingUser) await env.DB.prepare("DELETE FROM chat_presence WHERE user_id = ?").bind(exitingUser.id).run();
       await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
     }
     return json({ ok: true }, 200, { "Set-Cookie": sessionCookie("", 0) });
@@ -1016,25 +970,6 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
   }
 
   const user = await requireUser(request, env);
-
-  if (url.pathname === "/api/random/presence" && request.method === "POST") {
-    const profile = await chatProfile(env, user.id);
-    if (!profile || profile.is_test_profile) throw new HttpError(403, "일반 회원만 대화 대기 상태를 사용할 수 있습니다.");
-    const body = await readJsonBody<{ state?: unknown }>(request);
-    if (body.state === "waiting") {
-      const now = new Date().toISOString();
-      await env.DB.prepare(`
-        INSERT INTO chat_presence (user_id, state, updated_at) VALUES (?, 'waiting', ?)
-        ON CONFLICT(user_id) DO UPDATE SET state = 'waiting', updated_at = excluded.updated_at
-      `).bind(user.id, now).run();
-      return json({ state: "waiting", updatedAt: now });
-    }
-    if (body.state === "offline") {
-      await env.DB.prepare("DELETE FROM chat_presence WHERE user_id = ?").bind(user.id).run();
-      return json({ state: "offline" });
-    }
-    throw new HttpError(400, "올바른 대화 상태를 선택해 주세요.");
-  }
 
   if (url.pathname === "/api/random/profile" && request.method === "GET") {
     const profile = await chatProfile(env, user.id);
@@ -1146,7 +1081,6 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       `).bind(id, roomId, user.id, operator.id, target.nickname, target.gender, target.region, target.age_band,
         target.job, target.nickname, target.gender, target.region, target.age_band, target.job, target.avatar_id,
         now, target.user_id, mode, now),
-      env.DB.prepare("DELETE FROM chat_presence WHERE user_id IN (?, ?)").bind(user.id, target.user_id),
     ];
     await env.DB.batch(statements);
     await audit(env, request, user.id, "dating.chat_started", "match", id, { mode });
@@ -1238,8 +1172,6 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       `).bind(id, roomId, user.id, operator.id, requestedNickname, gender, region, ageBand, job,
         personaNickname, personaGender, personaRegion, personaAge, personaJob, personaAvatar, now,
         candidate?.user_id ?? null, mode, now),
-      env.DB.prepare("DELETE FROM chat_presence WHERE user_id = ? OR user_id = ?")
-        .bind(user.id, candidate?.user_id ?? ""),
     ]);
     await audit(env, request, user.id, "random.match_created", "match", id, { roomId });
     const match = await env.DB.prepare(`
@@ -1286,7 +1218,6 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
           persona_region, persona_age_band, persona_job, persona_avatar_id, status, created_at
         ) VALUES (?, ?, ?, ?, 'ai', '루미 AI', 'AI', '온라인', '성인', '대화 도우미', 'f2', 'live', ?)
       `).bind(id, roomId, user.id, operator.id, now),
-      env.DB.prepare("DELETE FROM chat_presence WHERE user_id = ?").bind(user.id),
     ]);
     const match = await env.DB.prepare(`
       SELECT id, room_id, requester_id, operator_id, kind, persona_nickname, persona_gender,

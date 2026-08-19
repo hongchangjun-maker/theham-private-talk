@@ -26,8 +26,7 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.doesNotMatch(component, /테스트\s*운영자 대행|모니터링|감시/);
   assert.match(component, /신고하기/);
   assert.match(component, /차단하고 끝내기/);
-  assert.match(component, /실시간 대화 현황/);
-  assert.match(component, /지금 대화를 기다리는 회원이 없습니다/);
+  assert.doesNotMatch(component, /실시간 대화 현황|지금 대화를 기다리는 회원이 없습니다/);
   assert.match(layout, /lang="ko"/);
   assert.doesNotMatch(component, /codex-preview|Starter Project|Your site is taking shape/);
 });
@@ -41,9 +40,7 @@ test("Worker owns signup, random matching, realtime chat, AI, and moderation rou
   assert.match(source, /\/api\/random\/profile\/photo/);
   assert.match(source, /\/api\/random\/admin\/test-profiles/);
   assert.match(source, /\/api\/random\/admin\/export/);
-  assert.match(source, /\/api\/random\/activity/);
-  assert.match(source, /\/api\/random\/presence/);
-  assert.match(source, /p\.is_test_profile = 0/);
+  assert.doesNotMatch(source, /\/api\/random\/(activity|presence)/);
   assert.match(source, /env\.AI\.run/);
   assert.match(source, /\/api\/cloudflare\/master-login/);
   assert.match(source, /env\.MASTER_PIN/);
