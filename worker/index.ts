@@ -1058,11 +1058,18 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
       FROM random_matches m
       LEFT JOIN chat_profiles rp ON rp.user_id = m.requester_id
       LEFT JOIN chat_profiles tp ON tp.user_id = m.target_user_id
-      WHERE m.status != 'blocked' AND ((m.requester_id = ? AND m.target_user_id = ?)
+      WHERE m.status = 'live' AND ((m.requester_id = ? AND m.target_user_id = ?)
         OR (? = 'direct' AND m.requester_id = ? AND m.target_user_id = ?))
       ORDER BY m.created_at DESC LIMIT 1
     `).bind(user.id, target.user_id, mode, target.user_id, user.id).first<RandomMatch>();
     if (existing) return json({ match: publicMatch(existing, user.id), resumed: true });
+    const blocked = await env.DB.prepare(`
+      SELECT 1 AS blocked FROM random_matches
+      WHERE status = 'blocked' AND ((requester_id = ? AND target_user_id = ?)
+        OR (? = 'direct' AND requester_id = ? AND target_user_id = ?))
+      LIMIT 1
+    `).bind(user.id, target.user_id, mode, target.user_id, user.id).first();
+    if (blocked) throw new HttpError(403, "차단한 상대와는 새 대화를 시작할 수 없습니다.");
     const operator = await env.DB.prepare(
       "SELECT id FROM users WHERE role = 'super_admin' AND status = 'active' LIMIT 1",
     ).first<{ id: string }>();
@@ -1092,7 +1099,9 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
         now, target.user_id, mode, now),
     ];
     await env.DB.batch(statements);
-    await audit(env, request, user.id, "dating.chat_started", "match", id, { mode });
+    await audit(env, request, user.id, "dating.chat_started", "match", id, {
+      mode, roomId, targetUserId: target.user_id, targetNickname: target.nickname,
+    });
     const row: RandomMatch = {
       id, room_id: roomId, requester_id: user.id, operator_id: operator.id, kind: "operator",
       persona_nickname: target.nickname, persona_gender: target.gender, persona_region: target.region,

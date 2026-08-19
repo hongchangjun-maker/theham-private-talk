@@ -89,3 +89,7 @@ button,input,select,textarea { font:inherit; } button { cursor:pointer; } button
 .sr-live-extra .sr-live-extra-row button { width:auto; min-height:34px; padding:7px 9px; justify-content:center; border:1px solid #e0d6da; }
 .sr-live-extra .sr-live-extra-row .open { min-width:0; justify-content:space-between; text-align:left; }
 .sr-live-extra .sr-live-extra-row .delete { color:#b83045; border-color:#efcbd1; background:#fff8f9; }
+.sr-connect-note { margin:10px 0; color:#70636a; font-size:11px; line-height:1.5; }
+.sr-chat-info.ready { color:#087a3f; background:#eafff2; border-color:#9be0b8; font-weight:800; }
+.sr-live-help b,.sr-live-help span { display:block; }
+.sr-live-help span { margin-top:3px; }
