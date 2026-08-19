@@ -774,6 +774,7 @@ async function api(request: Request, env: AppEnv, ctx: ExecutionContext): Promis
   if (url.pathname === "/api/cloudflare/master-login" && request.method === "POST") {
     const body = await readJsonBody<{ pin?: unknown }>(request);
     const pin = String(body.pin ?? "");
+    if (pin.length < 8 || pin.length > 64) throw new HttpError(400, "관리자 비밀번호는 8~64자로 입력해 주세요.");
     const keyHash = await sha256(`${requestIp(request)}:master`);
     const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
     const attempts = await env.DB.prepare(

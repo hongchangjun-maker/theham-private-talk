@@ -321,7 +321,7 @@ function Chat({ match, user, profile, admin, onBack, onBlocked, setNotice }: { m
 
 function AdminLogin({ onBack, onSubmit, busy }: { onBack: () => void; onSubmit: (pin: string) => void; busy: boolean }) {
   const [pin, setPin] = useState("");
-  return <section className="sr-page"><TopBar title="마스터 관리자" onBack={onBack} /><form className="sr-auth-card" onSubmit={(e) => { e.preventDefault(); onSubmit(pin); }}><div className="sr-round-icon"><LockKeyhole /></div><h2>관리자 비밀번호</h2><p>관리자만 들어갈 수 있습니다.</p><label>비밀번호<input type="password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" placeholder="숫자 비밀번호" autoFocus required /></label><button className="sr-primary sr-big" disabled={busy}>{busy ? "확인 중…" : "관리 화면 들어가기"}</button></form></section>;
+  return <section className="sr-page"><TopBar title="마스터 관리자" onBack={onBack} /><form className="sr-auth-card" onSubmit={(e) => { e.preventDefault(); onSubmit(pin); }}><div className="sr-round-icon"><LockKeyhole /></div><h2>관리자 비밀번호</h2><p>관리자만 들어갈 수 있습니다.</p><label>비밀번호<input type="password" value={pin} onChange={(e) => setPin(e.target.value.slice(0, 64))} autoComplete="current-password" minLength={8} maxLength={64} placeholder="관리자 비밀번호" autoFocus required /></label><button className="sr-primary sr-big" disabled={busy}>{busy ? "확인 중…" : "관리 화면 들어가기"}</button></form></section>;
 }
 
 function AdminDashboard({ user, onLogout, setNotice }: { user: User; onLogout: () => void; setNotice: (v: string) => void }) {

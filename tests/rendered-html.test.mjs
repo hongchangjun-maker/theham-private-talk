@@ -16,6 +16,9 @@ test("source contains beginner-first signup, roulette, AI, and admin entrances",
   assert.match(component, /JSON\.stringify\(\{ name, phoneLast4 \}\)/);
   assert.doesNotMatch(component, /예: 홍길동|예: 6085|예: 봄바람|placeholder="숫자 4자리"/);
   assert.match(component, /마스터 관리자/);
+  assert.match(component, /autoComplete="current-password"/);
+  assert.match(component, /minLength=\{8\} maxLength=\{64\}/);
+  assert.doesNotMatch(component, /placeholder="숫자 비밀번호"/);
   assert.match(component, /5초 룰렛 시작하기/);
   assert.match(component, /루미 AI와 대화/);
   assert.match(component, /공개 데이트 채팅/);
@@ -44,6 +47,7 @@ test("Worker owns signup, random matching, realtime chat, AI, and moderation rou
   assert.match(source, /env\.AI\.run/);
   assert.match(source, /\/api\/cloudflare\/master-login/);
   assert.match(source, /env\.MASTER_PIN/);
+  assert.match(source, /pin\.length < 8 \|\| pin\.length > 64/);
   assert.match(source, /env\.PHONE_HASH_PEPPER/);
   assert.match(source, /\{2,10\}/);
   assert.match(source, /hostname\.endsWith\("\.chatgpt\.site"\)/);
